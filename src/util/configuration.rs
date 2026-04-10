@@ -1,0 +1,4 @@
+struct Configuration{
+    path: String,
+
+}
