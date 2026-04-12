@@ -1,21 +1,19 @@
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::fs;
 use std::path::PathBuf;
+
+use super::paths::{base_config_dir, SERVER_CONFIG_FILE};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ConfigLocation {
     Local,
-    Global,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ServerConfig {
     pub jar_path: String,
-    
     pub jvm_args: Vec<String>,
     pub jar_args: Vec<String>,
-    
     pub auto_restart: bool,
 
     #[serde(skip)]
@@ -25,30 +23,9 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    fn base_dir(location: ConfigLocation) -> Result<PathBuf, String> {
-        match location {
-            ConfigLocation::Local => {
-                let exe_path = env::current_exe()
-                    .map_err(|e| format!("Could not get executable path: {e}"))?;
-
-                let exe_dir = exe_path
-                    .parent()
-                    .ok_or("Executable has no parent directory".to_string())?;
-
-                Ok(exe_dir.join("core_config"))
-            }
-            ConfigLocation::Global => {
-                let home = env::var("HOME")
-                    .map_err(|_| "HOME environment variable not found".to_string())?;
-
-                Ok(PathBuf::from(home).join(".lumcoreserver"))
-            }
-        }
-    }
-
-    pub fn load_or_create(location: ConfigLocation) -> Result<Self, String> {
-        let config_dir = Self::base_dir(location)?;
-        let config_file_path = config_dir.join("config.json");
+    pub fn load_or_create(_location: ConfigLocation) -> Result<Self, String> {
+        let config_dir = base_config_dir()?;
+        let config_file_path = config_dir.join(SERVER_CONFIG_FILE);
 
         fs::create_dir_all(&config_dir)
             .map_err(|e| format!("Could not create config directory: {e}"))?;
@@ -67,8 +44,11 @@ impl ServerConfig {
         } else {
             let config = ServerConfig {
                 jar_path: String::from("/home/dukelo/Escritorio/Server/beat/Server/HytaleServer.jar"),
-                jvm_args: vec![String::from("")],
-                jar_args: vec![String::from("--assets"), String::from("../Assets.zip")],
+                jvm_args: vec![],
+                jar_args: vec![
+                    String::from("--assets"),
+                    String::from("../Assets.zip"),
+                ],
                 auto_restart: true,
                 config_dir,
                 config_file_path,
