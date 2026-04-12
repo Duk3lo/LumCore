@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
+use std::{
+    fs,
+    path::PathBuf,
+};
 
 use super::paths::{base_config_dir, SERVER_CONFIG_FILE};
 
@@ -9,7 +11,7 @@ pub enum ConfigLocation {
     Local,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub jar_path: String,
     pub jvm_args: Vec<String>,
@@ -20,6 +22,19 @@ pub struct ServerConfig {
     pub config_dir: PathBuf,
     #[serde(skip)]
     pub config_file_path: PathBuf,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            jar_path: String::new(),
+            jvm_args: vec![],
+            jar_args: vec![],
+            auto_restart: true,
+            config_dir: PathBuf::new(),
+            config_file_path: PathBuf::new(),
+        }
+    }
 }
 
 impl ServerConfig {
@@ -35,24 +50,17 @@ impl ServerConfig {
                 .map_err(|e| format!("Could not read config: {e}"))?;
 
             let mut config: ServerConfig =
-                serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {e}"))?;
+                serde_json::from_str(&content)
+                    .map_err(|e| format!("Invalid JSON: {e}"))?;
 
             config.config_dir = config_dir;
             config.config_file_path = config_file_path;
 
             Ok(config)
         } else {
-            let config = ServerConfig {
-                jar_path: String::from("/home/dukelo/Escritorio/Server/beat/Server/HytaleServer.jar"),
-                jvm_args: vec![],
-                jar_args: vec![
-                    String::from("--assets"),
-                    String::from("../Assets.zip"),
-                ],
-                auto_restart: true,
-                config_dir,
-                config_file_path,
-            };
+            let mut config = ServerConfig::default();
+            config.config_dir = config_dir;
+            config.config_file_path = config_file_path;
 
             config.save()?;
             Ok(config)

@@ -1,5 +1,5 @@
-mod util;
-use util::core::CoreApp;
+mod lum;
+use lum::core::CoreApp;
 
 fn main() {
     CoreApp::start();
