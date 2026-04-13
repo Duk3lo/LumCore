@@ -25,10 +25,6 @@ pub fn workspace_dir() -> Result<PathBuf, String> {
     base_config_dir()
 }
 
-pub fn syncmods_dir() -> Result<PathBuf, String> {
-    Ok(workspace_dir()?.join(SYNC_MODS_DIR))
-}
-
 pub fn ensure_base_hierarchy() -> Result<(PathBuf, PathBuf), String> {
     let workspace = workspace_dir()?;
     let syncmods = workspace.join(SYNC_MODS_DIR);
@@ -56,13 +52,5 @@ pub fn resolve(workspace: &Path, raw_path: &str) -> Option<PathBuf> {
         Some(path)
     } else {
         Some(workspace.join(path))
-    }
-}
-
-pub fn relativize(workspace: &Path, absolute_path: &Path) -> String {
-    if let Ok(relative) = absolute_path.strip_prefix(workspace) {
-        format!("./{}", relative.to_string_lossy().replace("\\", "/"))
-    } else {
-        absolute_path.to_string_lossy().to_string()
     }
 }
