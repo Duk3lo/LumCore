@@ -1,6 +1,5 @@
 mod lum;
-use lum::core::CoreApp;
-
+use crate::lum::core::CoreApp;
 fn main() {
     CoreApp::start();
 }

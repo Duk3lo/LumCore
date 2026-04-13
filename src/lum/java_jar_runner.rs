@@ -1,9 +1,13 @@
-use std::process::{Command, Stdio};
-use std::io::{BufReader, BufRead, Write};
-use std::sync::mpsc::Receiver;
-use std::thread;
-use std::path::{Path, PathBuf};
-use super::config::ServerConfig;
+
+use std::{
+    io::{BufRead, BufReader, Write},
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::mpsc::Receiver,
+    thread,
+};
+
+use super::config::server_config::ServerConfig;
 
 pub struct JavaJarRunner {
     jar_name: String,
@@ -13,13 +17,23 @@ pub struct JavaJarRunner {
 }
 
 impl JavaJarRunner {
-    pub fn from_config(config: &ServerConfig) -> Self {
-        let full_path = PathBuf::from(&config.jar_path);
+    pub fn from_config(config: &ServerConfig) -> Result<Self, String> {
+        let jar_path = config.jar_path.trim();
+        if jar_path.is_empty() {
+            return Err("La ruta del JAR está vacía".to_string());
+        }
+
+        let full_path = PathBuf::from(jar_path);
+
         let jar_name = full_path
             .file_name()
-            .expect("La ruta debe incluir el nombre de un archivo .jar")
-            .to_string_lossy()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| "La ruta debe incluir el nombre de un archivo .jar".to_string())?
             .to_string();
+
+        if !jar_name.to_lowercase().ends_with(".jar") {
+            return Err("La ruta debe terminar en .jar".to_string());
+        }
 
         let jar_dir = full_path
             .parent()
@@ -27,12 +41,12 @@ impl JavaJarRunner {
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
 
-        JavaJarRunner {
+        Ok(Self {
             jar_name,
             jar_dir,
             jvm_args: config.jvm_args.clone(),
             jar_args: config.jar_args.clone(),
-        }
+        })
     }
 
     pub fn start_and_read(&self, rx: Receiver<String>) {
@@ -56,7 +70,7 @@ impl JavaJarRunner {
             }
         }
 
-        command.stdout(Stdio::piped()).stdin(Stdio::piped());
+        command.stdout(Stdio::piped()).stdin(Stdio::piped()).stderr(Stdio::piped());
 
         let mut child = match command.spawn() {
             Ok(process) => process,
@@ -66,28 +80,76 @@ impl JavaJarRunner {
             }
         };
 
-        if let Some(mut jar_stdin) = child.stdin.take() {
+        self.pipe_stdin(rx, &mut child);
+        self.pipe_output(&mut child);
+    }
+
+    fn pipe_stdin(&self, rx: Receiver<String>, child: &mut Child) {
+        let Some(mut jar_stdin) = child.stdin.take() else {
+            println!("No se pudo abrir stdin del proceso Java");
+            return;
+        };
+
+        thread::spawn(move || {
+            for cmd in rx {
+                let formatted_cmd = format!("{cmd}\n");
+                if jar_stdin.write_all(formatted_cmd.as_bytes()).is_err() {
+                    break;
+                }
+                let _ = jar_stdin.flush();
+            }
+        });
+    }
+
+    fn pipe_output(&self, child: &mut Child) {
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let stdout_handle = stdout.map(|out| {
             thread::spawn(move || {
-                for cmd in rx {
-                    let formatted_cmd = format!("{}\n", cmd);
-                    if jar_stdin.write_all(formatted_cmd.as_bytes()).is_err() {
-                        break;
+                let reader = BufReader::new(out);
+                for line in reader.lines() {
+                    match line {
+                        Ok(text) => println!("[JAR OUT] {}", text),
+                        Err(e) => {
+                            println!("Error reading stdout: {}", e);
+                            break;
+                        }
                     }
                 }
-            });
-        }
+            })
+        });
 
-        if let Some(jar_stdout) = child.stdout.take() {
-            let reader = BufReader::new(jar_stdout);
-            for line in reader.lines() {
-                match line {
-                    Ok(text) => println!("[JAR LOG]: {}", text),
-                    Err(e) => println!("Error reading output: {}", e),
+        let stderr_handle = stderr.map(|err| {
+            thread::spawn(move || {
+                let reader = BufReader::new(err);
+                for line in reader.lines() {
+                    match line {
+                        Ok(text) => eprintln!("[JAR ERR] {}", text),
+                        Err(e) => {
+                            eprintln!("Error reading stderr: {}", e);
+                            break;
+                        }
+                    }
                 }
+            })
+        });
+
+        let exit_status = match child.wait() {
+            Ok(status) => status,
+            Err(e) => {
+                println!("Error waiting Java process: {}", e);
+                return;
             }
+        };
+
+        if let Some(handle) = stdout_handle {
+            let _ = handle.join();
+        }
+        if let Some(handle) = stderr_handle {
+            let _ = handle.join();
         }
 
-        let exit_status = child.wait().unwrap();
         println!("JAR finished with status: {}", exit_status);
     }
 }

@@ -29,7 +29,7 @@ impl Default for ServerConfig {
         Self {
             jar_path: String::new(),
             jvm_args: vec![],
-            jar_args: vec![],
+            jar_args: vec!["--assets".to_string(), "../Assets.zip".to_string()],
             auto_restart: true,
             config_dir: PathBuf::new(),
             config_file_path: PathBuf::new(),

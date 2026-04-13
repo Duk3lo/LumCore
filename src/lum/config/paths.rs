@@ -4,8 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const CORE_CONFIG_DIR: &str = "lumfolder";
-pub const CORE_NEXUS_DIR: &str = "CoreNexus";
+pub const MAIN_DIR: &str = "lumfolder";
 pub const SYNC_MODS_DIR: &str = "syncmods";
 
 pub const SERVER_CONFIG_FILE: &str = "config.json";
@@ -19,30 +18,27 @@ pub fn base_config_dir() -> Result<PathBuf, String> {
         .parent()
         .ok_or("El ejecutable no tiene directorio padre".to_string())?;
 
-    Ok(exe_dir.join(CORE_CONFIG_DIR))
+    Ok(exe_dir.join(MAIN_DIR))
 }
 
 pub fn workspace_dir() -> Result<PathBuf, String> {
-    Ok(base_config_dir()?.join(CORE_NEXUS_DIR))
+    base_config_dir()
 }
 
 pub fn syncmods_dir() -> Result<PathBuf, String> {
     Ok(workspace_dir()?.join(SYNC_MODS_DIR))
 }
 
-pub fn ensure_base_hierarchy() -> Result<(PathBuf, PathBuf, PathBuf), String> {
-    let base_dir = base_config_dir()?;
-    let workspace = base_dir.join(CORE_NEXUS_DIR);
+pub fn ensure_base_hierarchy() -> Result<(PathBuf, PathBuf), String> {
+    let workspace = workspace_dir()?;
     let syncmods = workspace.join(SYNC_MODS_DIR);
 
-    fs::create_dir_all(&base_dir)
-        .map_err(|e| format!("No pude crear lumfolder: {e}"))?;
     fs::create_dir_all(&workspace)
-        .map_err(|e| format!("No pude crear CoreNexus: {e}"))?;
+        .map_err(|e| format!("No pude crear el directorio base ({}): {}", MAIN_DIR, e))?;
     fs::create_dir_all(&syncmods)
-        .map_err(|e| format!("No pude crear syncmods: {e}"))?;
+        .map_err(|e| format!("No pude crear el directorio syncmods: {e}"))?;
 
-    Ok((base_dir, workspace, syncmods))
+    Ok((workspace, syncmods))
 }
 
 pub fn resolve(workspace: &Path, raw_path: &str) -> Option<PathBuf> {
@@ -52,7 +48,7 @@ pub fn resolve(workspace: &Path, raw_path: &str) -> Option<PathBuf> {
     }
 
     if raw_path.starts_with("./") || raw_path.starts_with(".\\") {
-        return Some(workspace.join(&raw_path[2..]).to_path_buf());
+        return Some(workspace.join(&raw_path[2..]));
     }
 
     let path = PathBuf::from(raw_path);
