@@ -1,4 +1,5 @@
 use crate::lum::commands::{self, CoreContext};
+use crate::lum::config;
 use crate::lum::config::server_config::{ConfigLocation, ServerConfig};
 use crate::lum::config::watcher_config::{WatchersConfig};
 use crate::lum::java_jar_runner::JavaJarRunner;
@@ -14,7 +15,7 @@ use std::{
 
 pub struct CoreApp;
 
-pub(crate) struct ServerRuntime {
+pub struct ServerRuntime {
     pub tx: mpsc::Sender<String>,
     pub handle: thread::JoinHandle<()>,
 }
@@ -168,7 +169,7 @@ impl CoreApp {
                 .unwrap_or("")
                 .to_lowercase();
 
-            if name.contains("corenexus") {
+            if name.contains(config::paths::MAIN_DIR) {
                 continue;
             }
 
@@ -199,7 +200,7 @@ impl CoreApp {
         Ok(())
     }
 
-    pub(crate) fn stop_server(server_runtime: &mut Option<ServerRuntime>) {
+    pub fn stop_server(server_runtime: &mut Option<ServerRuntime>) {
         if let Some(runtime) = server_runtime.take() {
             let _ = runtime.tx.send("stop".to_string());
             let _ = runtime.handle.join();
