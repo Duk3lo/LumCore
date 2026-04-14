@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 // Importamos lo necesario de módulos hermanos
 use super::paths::{WATCHERS_CONFIG_FILE, ensure_base_hierarchy};
-use super::server_config::{ConfigLocation, ServerConfig};
+use super::jar_config::{ConfigLocation, ServerConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatcherConfig {

@@ -7,7 +7,7 @@ use std::{
     thread,
 };
 
-use super::config::server_config::ServerConfig;
+use super::config::jar_config::ServerConfig;
 
 pub struct JavaJarRunner {
     jar_name: String,

@@ -1,6 +1,6 @@
 use crate::lum::commands::{self, CoreContext};
 use crate::lum::config;
-use crate::lum::config::server_config::{ConfigLocation, ServerConfig};
+use crate::lum::config::jar_config::{ConfigLocation, ServerConfig};
 use crate::lum::config::watcher_config::{WatchersConfig};
 use crate::lum::java_jar_runner::JavaJarRunner;
 use crate::lum::watchers::watcher_manager::WatcherManager;

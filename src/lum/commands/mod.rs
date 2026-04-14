@@ -1,8 +1,8 @@
 pub mod core;
-pub mod server;
+pub mod jar;
 pub mod watcher;
 
-use crate::lum::config::server_config::ServerConfig;
+use crate::lum::config::jar_config::ServerConfig;
 use crate::lum::config::watcher_config::WatchersConfig;
 use crate::lum::core::ServerRuntime;
 use crate::lum::watchers::watcher_manager::WatcherManager;
@@ -27,7 +27,7 @@ pub fn print_help() {
     }
 
     println!("--- SERVER COMMANDS ---");
-    for cmd in server::COMMANDS {
+    for cmd in jar::COMMANDS {
         println!("{:<36} - {}", cmd.usage, cmd.description);
     }
 
@@ -40,14 +40,14 @@ pub fn print_help() {
 }
 
 pub fn dispatch(input: &str, ctx: &mut CoreContext) -> bool {
-    let cmd = input.split_whitespace().next().unwrap_or("").to_lowercase();
-
-    match cmd.as_str() {
-        "core-help" | "core-status" => core::handle(input, ctx),
-        "server-path" | "server-jar" | "server-jvm-args" | "server-jar-args" | "start-server" | "stop-server" => {
-            server::handle(input, ctx)
-        }
-        "core-watcher" => watcher::handle(input, ctx),
-        _ => false,
+    if jar::handle(input, ctx) {
+        return true;
     }
+    if watcher::handle(input, ctx) {
+        return true;
+    }
+    if core::handle(input, ctx) {
+        return true;
+    }
+    false
 }
