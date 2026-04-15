@@ -4,14 +4,16 @@ pub mod watcher;
 
 use crate::lum::config::jar_config::ServerConfig;
 use crate::lum::config::watcher_config::WatchersConfig;
-use crate::lum::core::ServerRuntime;
+use crate::lum::core::{CoreEvent, ServerRuntime};
 use crate::lum::watchers::watcher_manager::WatcherManager;
+use std::sync::mpsc;
 
 pub struct CoreContext<'a> {
     pub server_cfg: &'a mut ServerConfig,
     pub watchers_cfg: &'a mut WatchersConfig,
     pub watcher_manager: &'a mut WatcherManager,
     pub server_runtime: &'a mut Option<ServerRuntime>,
+    pub event_tx: &'a mpsc::Sender<CoreEvent>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,11 +45,14 @@ pub fn dispatch(input: &str, ctx: &mut CoreContext) -> bool {
     if jar::handle(input, ctx) {
         return true;
     }
+
     if watcher::handle(input, ctx) {
         return true;
     }
+
     if core::handle(input, ctx) {
         return true;
     }
+
     false
 }

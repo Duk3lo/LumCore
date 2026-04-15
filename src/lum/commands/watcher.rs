@@ -10,6 +10,7 @@ macro_rules! prefix {
         "watcher"
     };
 }
+
 macro_rules! usage {
     ($rest:expr) => {
         concat!(prefix!(), " ", $rest)
@@ -17,38 +18,37 @@ macro_rules! usage {
 }
 
 const PREFIX: &str = prefix!();
-
 const SUB_LIST: &str = "list";
 const SUB_ADD: &str = "add";
 const SUB_ENABLE: &str = "enable";
 const SUB_DISABLE: &str = "disable";
 const SUB_REMOVE: &str = "remove";
 const SUB_SETDEST: &str = "setdest";
-// ==========================================
 
+// ==========================================
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         usage: usage!("list"),
         description: "Lista todos los watchers",
     },
     CommandSpec {
-        usage: usage!("add <nombre> <source> [<destination>]"),
+        usage: usage!("add  []"),
         description: "Crea un watcher nuevo",
     },
     CommandSpec {
-        usage: usage!("enable <nombre>"),
+        usage: usage!("enable "),
         description: "Habilita un watcher",
     },
     CommandSpec {
-        usage: usage!("disable <nombre>"),
+        usage: usage!("disable "),
         description: "Deshabilita un watcher",
     },
     CommandSpec {
-        usage: usage!("remove <nombre>"),
+        usage: usage!("remove "),
         description: "Elimina un watcher",
     },
     CommandSpec {
-        usage: usage!("setdest <nombre> <destination>"),
+        usage: usage!("setdest  "),
         description: "Cambia el destino de un watcher",
     },
 ];
@@ -94,6 +94,7 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
                         .unwrap_or_else(|| "none".to_string())
                 );
             }
+
             true
         }
 
@@ -101,10 +102,7 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
             let args_vec: Vec<&str> = args.split_whitespace().collect();
 
             if args_vec.is_empty() {
-                println!(
-                    "Uso: {} {} <source>  O  {} {} <nombre> <source> [<destination>]",
-                    PREFIX, SUB_ADD, PREFIX, SUB_ADD
-                );
+                println!("Uso: {} {}  o  {} {} <nombre> <origen> [destino]", PREFIX, SUB_ADD, PREFIX, SUB_ADD);
                 return true;
             }
 
@@ -117,12 +115,8 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
                         .unwrap_or("unnamed_watcher");
                     (auto_name.to_string(), args_vec[0], "")
                 }
-                2 => {
-                    (args_vec[0].to_string(), args_vec[1], "")
-                }
-                _ => {
-                    (args_vec[0].to_string(), args_vec[1], args_vec[2])
-                }
+                2 => (args_vec[0].to_string(), args_vec[1], ""),
+                _ => (args_vec[0].to_string(), args_vec[1], args_vec[2]),
             };
 
             let source = match resolve(&workspace, source_raw) {
@@ -164,7 +158,10 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
                 return true;
             }
 
-            if let Err(e) = ctx.watcher_manager.start_named(name.clone(), cfg) {
+            if let Err(e) = ctx
+                .watcher_manager
+                .start_named(name.clone(), cfg, ctx.event_tx.clone())
+            {
                 println!("[Watcher Error] No se pudo iniciar watcher: {e}");
             }
 
@@ -177,12 +174,14 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
                     .unwrap()
                     .destination_path
             );
+
             true
         }
+
         s if s == SUB_ENABLE => {
             let name = args.trim();
             if name.is_empty() {
-                println!("Uso: {} {} <nombre>", PREFIX, SUB_ENABLE);
+                println!("Uso: {} {} ", PREFIX, SUB_ENABLE);
                 return true;
             }
 
@@ -204,18 +203,23 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
             }
 
             ctx.watcher_manager.stop_named(name);
-            if let Err(e) = ctx.watcher_manager.start_named(name.to_string(), cfg) {
+
+            if let Err(e) = ctx
+                .watcher_manager
+                .start_named(name.to_string(), cfg, ctx.event_tx.clone())
+            {
                 println!("[Watcher Error] No se pudo reiniciar watcher: {e}");
             } else {
                 println!("[Watcher] habilitado: {}", name);
             }
+
             true
         }
 
         s if s == SUB_DISABLE => {
             let name = args.trim();
             if name.is_empty() {
-                println!("Uso: {} {} <nombre>", PREFIX, SUB_DISABLE);
+                println!("Uso: {} {} ", PREFIX, SUB_DISABLE);
                 return true;
             }
 
@@ -244,7 +248,7 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
         s if s == SUB_REMOVE => {
             let name = args.trim();
             if name.is_empty() {
-                println!("Uso: {} {} <nombre>", PREFIX, SUB_REMOVE);
+                println!("Uso: {} {} ", PREFIX, SUB_REMOVE);
                 return true;
             }
 
@@ -255,10 +259,12 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
                     println!("[Watcher Error] No se pudo guardar watchers.json: {e}");
                     return true;
                 }
+
                 println!("[Watcher] eliminado: {}", name);
             } else {
                 println!("[Watcher Error] No existe watcher: {}", name);
             }
+
             true
         }
 
@@ -268,7 +274,7 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
             let dest_raw = p.next().unwrap_or("");
 
             if name.is_empty() || dest_raw.is_empty() {
-                println!("Uso: {} {} <nombre> <destination>", PREFIX, SUB_SETDEST);
+                println!("Uso: {} {} <nombre> <destino>", PREFIX, SUB_SETDEST);
                 return true;
             }
 
@@ -298,8 +304,11 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
             }
 
             ctx.watcher_manager.stop_named(name);
+
             if cfg.enabled {
-                let _ = ctx.watcher_manager.start_named(name.to_string(), cfg);
+                let _ = ctx
+                    .watcher_manager
+                    .start_named(name.to_string(), cfg, ctx.event_tx.clone());
             }
 
             println!("[Watcher] destino actualizado: {}", name);

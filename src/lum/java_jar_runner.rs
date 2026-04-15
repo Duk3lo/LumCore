@@ -1,13 +1,19 @@
-
 use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    sync::mpsc::Receiver,
+    process::{Command, Stdio},
+    sync::mpsc::{Receiver, RecvTimeoutError},
     thread,
+    time::Duration,
 };
 
 use super::config::jar_config::ServerConfig;
+
+#[derive(Debug, Clone)]
+pub enum RunnerCommand {
+    Input(String),
+    Stop,
+}
 
 pub struct JavaJarRunner {
     jar_name: String,
@@ -24,7 +30,6 @@ impl JavaJarRunner {
         }
 
         let full_path = PathBuf::from(jar_path);
-
         let jar_name = full_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -49,7 +54,7 @@ impl JavaJarRunner {
         })
     }
 
-    pub fn start_and_read(&self, rx: Receiver<String>) {
+    pub fn start_and_read(&self, rx: Receiver<RunnerCommand>) {
         println!("Starting JAR: {}", self.jar_name);
         println!("Working directory: {:?}", self.jar_dir);
 
@@ -70,7 +75,9 @@ impl JavaJarRunner {
             }
         }
 
-        command.stdout(Stdio::piped()).stdin(Stdio::piped()).stderr(Stdio::piped());
+        command.stdout(Stdio::piped());
+        command.stdin(Stdio::piped());
+        command.stderr(Stdio::piped());
 
         let mut child = match command.spawn() {
             Ok(process) => process,
@@ -80,32 +87,7 @@ impl JavaJarRunner {
             }
         };
 
-        self.pipe_stdin(rx, &mut child);
-        self.pipe_output(&mut child);
-    }
-
-    fn pipe_stdin(&self, rx: Receiver<String>, child: &mut Child) {
-        let Some(mut jar_stdin) = child.stdin.take() else {
-            println!("No se pudo abrir stdin del proceso Java");
-            return;
-        };
-
-        thread::spawn(move || {
-            for cmd in rx {
-                let formatted_cmd = format!("{cmd}\n");
-                if jar_stdin.write_all(formatted_cmd.as_bytes()).is_err() {
-                    break;
-                }
-                let _ = jar_stdin.flush();
-            }
-        });
-    }
-
-    fn pipe_output(&self, child: &mut Child) {
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        let stdout_handle = stdout.map(|out| {
+        let stdout_handle = child.stdout.take().map(|out| {
             thread::spawn(move || {
                 let reader = BufReader::new(out);
                 for line in reader.lines() {
@@ -120,7 +102,7 @@ impl JavaJarRunner {
             })
         });
 
-        let stderr_handle = stderr.map(|err| {
+        let stderr_handle = child.stderr.take().map(|err| {
             thread::spawn(move || {
                 let reader = BufReader::new(err);
                 for line in reader.lines() {
@@ -135,21 +117,67 @@ impl JavaJarRunner {
             })
         });
 
-        let exit_status = match child.wait() {
-            Ok(status) => status,
-            Err(e) => {
-                println!("Error waiting Java process: {}", e);
-                return;
+        let mut jar_stdin = child.stdin.take();
+        let mut stop_requested = false;
+
+        loop {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(RunnerCommand::Input(cmd)) => {
+                    if let Some(stdin) = jar_stdin.as_mut() {
+                        let _ = stdin.write_all(cmd.as_bytes());
+                        let _ = stdin.write_all(b"\n");
+                        let _ = stdin.flush();
+                    }
+                }
+                Ok(RunnerCommand::Stop) => {
+                    stop_requested = true;
+                    if let Some(stdin) = jar_stdin.as_mut() {
+                        let _ = stdin.write_all(b"stop\n");
+                        let _ = stdin.flush();
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    stop_requested = true;
+                }
             }
-        };
+
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    println!("JAR finished with status: {}", status);
+                    break;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    println!("Error checking Java process: {}", e);
+                    break;
+                }
+            }
+
+            if stop_requested {
+                for _ in 0..10 {
+                    match child.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) => thread::sleep(Duration::from_millis(50)),
+                        Err(_) => break,
+                    }
+                }
+
+                if let Ok(None) = child.try_wait() {
+                    let _ = child.kill();
+                }
+
+                let _ = child.wait();
+                break;
+            }
+        }
 
         if let Some(handle) = stdout_handle {
             let _ = handle.join();
         }
+
         if let Some(handle) = stderr_handle {
             let _ = handle.join();
         }
-
-        println!("JAR finished with status: {}", exit_status);
     }
 }

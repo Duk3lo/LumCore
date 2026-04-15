@@ -1,7 +1,10 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     thread,
     time::{Duration, Instant, UNIX_EPOCH},
 };
@@ -92,20 +95,28 @@ fn wait_until_stable(
     quiet_for: Duration,
     max_wait: Duration,
     poll_every: Duration,
-) -> FileSnapshot {
+    stop_flag: &AtomicBool,
+) -> Option<FileSnapshot> {
     let start = Instant::now();
     let mut last_change = Instant::now();
     let mut last = snapshot(path);
 
     loop {
+        if stop_flag.load(Ordering::Relaxed) {
+            return None;
+        }
+
         if start.elapsed() >= max_wait {
-            return last;
+            return Some(last);
         }
 
         thread::sleep(poll_every);
 
-        let current = snapshot(path);
+        if stop_flag.load(Ordering::Relaxed) {
+            return None;
+        }
 
+        let current = snapshot(path);
         if current != last {
             last = current;
             last_change = Instant::now();
@@ -113,7 +124,7 @@ fn wait_until_stable(
         }
 
         if last_change.elapsed() >= quiet_for {
-            return last;
+            return Some(last);
         }
     }
 }
@@ -143,7 +154,6 @@ impl SyncState {
         };
 
         list.retain(|(_, until)| *until > now);
-
         list.iter().any(|(ignored, _)| path.starts_with(ignored))
     }
 }
@@ -161,6 +171,7 @@ fn delete_target(target_path: &Path) -> Result<(), String> {
         fs::remove_file(target_path)
             .map_err(|e| format!("No pude borrar archivo destino {:?}: {e}", target_path))?;
     }
+
     Ok(())
 }
 
@@ -171,6 +182,7 @@ pub fn sync_entry(
     extensions: &[String],
     restart_server_extensions: &[String],
     state: &SyncState,
+    stop_flag: &AtomicBool,
 ) -> Result<SyncAction, String> {
     if state.should_ignore(changed_path) {
         return Ok(SyncAction::None);
@@ -180,12 +192,18 @@ pub fn sync_entry(
         return Ok(SyncAction::None);
     }
 
-    let snap = wait_until_stable(
+    let restart_after_sync = should_restart_server(changed_path, restart_server_extensions);
+
+    let snap = match wait_until_stable(
         changed_path,
         Duration::from_millis(700),
         Duration::from_secs(8),
         Duration::from_millis(120),
-    );
+        stop_flag,
+    ) {
+        Some(s) => s,
+        None => return Ok(SyncAction::None),
+    };
 
     let relative = changed_path
         .strip_prefix(source_root)
@@ -197,7 +215,11 @@ pub fn sync_entry(
     if !snap.exists {
         state.ignore_for(&target_path, ignore_ttl);
         delete_target(&target_path)?;
-        return Ok(SyncAction::None);
+        return Ok(if restart_after_sync {
+            SyncAction::RestartServer
+        } else {
+            SyncAction::None
+        });
     }
 
     if snap.is_dir {
@@ -206,6 +228,7 @@ pub fn sync_entry(
         if target_path.is_file() {
             fs::remove_file(&target_path).ok();
         }
+
         fs::create_dir_all(&target_path)
             .map_err(|e| format!("No pude crear carpeta destino {:?}: {e}", target_path))?;
 
@@ -230,7 +253,7 @@ pub fn sync_entry(
     fs::copy(changed_path, &target_path)
         .map_err(|e| format!("No pude copiar {:?} -> {:?}: {e}", changed_path, target_path))?;
 
-    if should_restart_server(changed_path, restart_server_extensions) {
+    if restart_after_sync {
         return Ok(SyncAction::RestartServer);
     }
 
@@ -266,6 +289,7 @@ pub fn initial_sync(
             let relative = path
                 .strip_prefix(root)
                 .map_err(|e| format!("No pude relativizar {:?}: {e}", path))?;
+
             let target = destination_root.join(relative);
 
             if meta.is_dir() {
