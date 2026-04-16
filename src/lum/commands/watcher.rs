@@ -1,67 +1,17 @@
-use super::{CommandSpec, CoreContext};
+use super::CoreContext;
 use crate::lum::config::paths::{resolve, workspace_dir};
 use crate::lum::config::watcher_config::WatcherConfig;
 
-// ==========================================
-// CONFIGURACIÓN DE NOMBRES DE COMANDOS
-// ==========================================
-macro_rules! prefix {
-    () => {
-        "watcher"
-    };
-}
-
-macro_rules! usage {
-    ($rest:expr) => {
-        concat!(prefix!(), " ", $rest)
-    };
-}
-
-const PREFIX: &str = prefix!();
-const SUB_LIST: &str = "list";
-const SUB_ADD: &str = "add";
-const SUB_ENABLE: &str = "enable";
-const SUB_DISABLE: &str = "disable";
-const SUB_REMOVE: &str = "remove";
-const SUB_SETDEST: &str = "setdest";
-
-// ==========================================
-pub const COMMANDS: &[CommandSpec] = &[
-    CommandSpec {
-        usage: usage!("list"),
-        description: "Lista todos los watchers",
-    },
-    CommandSpec {
-        usage: usage!("add  []"),
-        description: "Crea un watcher nuevo",
-    },
-    CommandSpec {
-        usage: usage!("enable "),
-        description: "Habilita un watcher",
-    },
-    CommandSpec {
-        usage: usage!("disable "),
-        description: "Deshabilita un watcher",
-    },
-    CommandSpec {
-        usage: usage!("remove "),
-        description: "Elimina un watcher",
-    },
-    CommandSpec {
-        usage: usage!("setdest  "),
-        description: "Cambia el destino de un watcher",
-    },
-];
+const PREFIX: &str = "watcher";
 
 pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
     let mut parts = input.split_whitespace();
 
-    let cmd_prefix = parts.next().unwrap_or("");
-    if cmd_prefix != PREFIX {
+    if parts.next() != Some(PREFIX) {
         return false;
     }
 
-    let sub = parts.next().unwrap_or("").to_lowercase();
+    let sub = parts.next().unwrap_or("help").to_lowercase();
     let args = parts.collect::<Vec<_>>().join(" ");
 
     let workspace = match workspace_dir() {
@@ -73,7 +23,7 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
     };
 
     match sub.as_str() {
-        s if s == SUB_LIST => {
+        "list" => {
             println!("--- Watchers ---");
             if ctx.watchers_cfg.watchers.is_empty() {
                 println!("(vacío)");
@@ -82,37 +32,26 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
 
             for (name, w) in &ctx.watchers_cfg.watchers {
                 println!(
-                    "{} | enabled={} | multi_sync={} | copy_on_init={} | sources={} | dest={}",
+                    "{} | enabled={} | dest={}",
                     name,
                     w.enabled,
-                    w.multi_sync,
-                    w.copy_on_init,
-                    w.source_paths.len(),
-                    w.destination_path
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "none".to_string())
+                    w.destination_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "none".to_string())
                 );
             }
-
-            true
         }
 
-        s if s == SUB_ADD => {
+        "add" => {
             let args_vec: Vec<&str> = args.split_whitespace().collect();
 
             if args_vec.is_empty() {
-                println!("Uso: {} {}  o  {} {} <nombre> <origen> [destino]", PREFIX, SUB_ADD, PREFIX, SUB_ADD);
+                println!("Uso: watcher add <origen>  o  watcher add <nombre> <origen> [destino]");
                 return true;
             }
 
             let (name, source_raw, dest_raw) = match args_vec.len() {
                 1 => {
                     let path = std::path::Path::new(args_vec[0]);
-                    let auto_name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unnamed_watcher");
+                    let auto_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("unnamed_watcher");
                     (auto_name.to_string(), args_vec[0], "")
                 }
                 2 => (args_vec[0].to_string(), args_vec[1], ""),
@@ -121,24 +60,14 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
 
             let source = match resolve(&workspace, source_raw) {
                 Some(p) => p,
-                None => {
-                    println!("[Watcher Error] source inválido");
-                    return true;
-                }
+                None => { println!("[Watcher Error] source inválido"); return true; }
             };
 
-            let final_dest_raw = if dest_raw.is_empty() {
-                crate::lum::config::paths::SYNC_MODS_DIR
-            } else {
-                dest_raw
-            };
-
+            let final_dest_raw = if dest_raw.is_empty() { crate::lum::config::paths::SYNC_MODS_DIR } else { dest_raw };
+            
             let destination = match resolve(&workspace, final_dest_raw) {
                 Some(p) => p,
-                None => {
-                    println!("[Watcher Error] destination inválido");
-                    return true;
-                }
+                None => { println!("[Watcher Error] destination inválido"); return true; }
             };
 
             if !source.exists() {
@@ -152,175 +81,99 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
             cfg.enabled = true;
 
             ctx.watchers_cfg.watchers.insert(name.clone(), cfg.clone());
+            let _ = ctx.watchers_cfg.save();
 
-            if let Err(e) = ctx.watchers_cfg.save() {
-                println!("[Watcher Error] No se pudo guardar watchers.json: {e}");
-                return true;
-            }
-
-            if let Err(e) = ctx
-                .watcher_manager
-                .start_named(name.clone(), cfg, ctx.event_tx.clone())
-            {
+            if let Err(e) = ctx.watcher_manager.start_named(name.clone(), cfg, ctx.event_tx.clone()) {
                 println!("[Watcher Error] No se pudo iniciar watcher: {e}");
             }
 
-            println!(
-                "[Watcher] agregado y activado: {} (Destino: {:?})",
-                name,
-                ctx.watchers_cfg
-                    .watchers
-                    .get(&name)
-                    .unwrap()
-                    .destination_path
-            );
-
-            true
+            println!("[Watcher] agregado y activado: {}", name);
         }
 
-        s if s == SUB_ENABLE => {
+        "enable" => {
             let name = args.trim();
-            if name.is_empty() {
-                println!("Uso: {} {} ", PREFIX, SUB_ENABLE);
-                return true;
-            }
+            if name.is_empty() { println!("Uso: watcher enable <nombre>"); return true; }
 
-            let cloned = if let Some(w) = ctx.watchers_cfg.watchers.get_mut(name) {
+            if let Some(w) = ctx.watchers_cfg.watchers.get_mut(name) {
                 w.enabled = true;
-                Some(w.clone())
-            } else {
-                None
-            };
-
-            let Some(cfg) = cloned else {
-                println!("[Watcher Error] No existe watcher: {}", name);
-                return true;
-            };
-
-            if let Err(e) = ctx.watchers_cfg.save() {
-                println!("[Watcher Error] No se pudo guardar watchers.json: {e}");
-                return true;
-            }
-
-            ctx.watcher_manager.stop_named(name);
-
-            if let Err(e) = ctx
-                .watcher_manager
-                .start_named(name.to_string(), cfg, ctx.event_tx.clone())
-            {
-                println!("[Watcher Error] No se pudo reiniciar watcher: {e}");
-            } else {
+                let cfg_clone = w.clone();
+                let _ = ctx.watchers_cfg.save();
+                
+                ctx.watcher_manager.stop_named(name);
+                let _ = ctx.watcher_manager.start_named(name.to_string(), cfg_clone, ctx.event_tx.clone());
                 println!("[Watcher] habilitado: {}", name);
-            }
-
-            true
-        }
-
-        s if s == SUB_DISABLE => {
-            let name = args.trim();
-            if name.is_empty() {
-                println!("Uso: {} {} ", PREFIX, SUB_DISABLE);
-                return true;
-            }
-
-            let exists = if let Some(w) = ctx.watchers_cfg.watchers.get_mut(name) {
-                w.enabled = false;
-                true
             } else {
-                false
-            };
-
-            if !exists {
                 println!("[Watcher Error] No existe watcher: {}", name);
-                return true;
             }
-
-            if let Err(e) = ctx.watchers_cfg.save() {
-                println!("[Watcher Error] No se pudo guardar watchers.json: {e}");
-                return true;
-            }
-
-            ctx.watcher_manager.stop_named(name);
-            println!("[Watcher] deshabilitado: {}", name);
-            true
         }
 
-        s if s == SUB_REMOVE => {
+        "disable" => {
             let name = args.trim();
-            if name.is_empty() {
-                println!("Uso: {} {} ", PREFIX, SUB_REMOVE);
-                return true;
+            if name.is_empty() { println!("Uso: watcher disable <nombre>"); return true; }
+
+            if let Some(w) = ctx.watchers_cfg.watchers.get_mut(name) {
+                w.enabled = false;
+                let _ = ctx.watchers_cfg.save();
+                ctx.watcher_manager.stop_named(name);
+                println!("[Watcher] deshabilitado: {}", name);
+            } else {
+                println!("[Watcher Error] No existe watcher: {}", name);
             }
+        }
+
+        "remove" => {
+            let name = args.trim();
+            if name.is_empty() { println!("Uso: watcher remove <nombre>"); return true; }
 
             ctx.watcher_manager.stop_named(name);
-
             if ctx.watchers_cfg.watchers.remove(name).is_some() {
-                if let Err(e) = ctx.watchers_cfg.save() {
-                    println!("[Watcher Error] No se pudo guardar watchers.json: {e}");
-                    return true;
-                }
-
+                let _ = ctx.watchers_cfg.save();
                 println!("[Watcher] eliminado: {}", name);
             } else {
                 println!("[Watcher Error] No existe watcher: {}", name);
             }
-
-            true
         }
 
-        s if s == SUB_SETDEST => {
+        "setdest" => {
             let mut p = args.split_whitespace();
             let name = p.next().unwrap_or("");
             let dest_raw = p.next().unwrap_or("");
 
             if name.is_empty() || dest_raw.is_empty() {
-                println!("Uso: {} {} <nombre> <destino>", PREFIX, SUB_SETDEST);
+                println!("Uso: watcher setdest <nombre> <destino>");
                 return true;
             }
 
             let destination = match resolve(&workspace, dest_raw) {
                 Some(p) => p,
-                None => {
-                    println!("[Watcher Error] destination inválido");
-                    return true;
-                }
+                None => { println!("[Watcher Error] destination inválido"); return true; }
             };
 
-            let cloned = if let Some(w) = ctx.watchers_cfg.watchers.get_mut(name) {
+            if let Some(w) = ctx.watchers_cfg.watchers.get_mut(name) {
                 w.destination_path = Some(destination);
-                Some(w.clone())
+                let cfg_clone = w.clone();
+                let _ = ctx.watchers_cfg.save();
+
+                ctx.watcher_manager.stop_named(name);
+                if cfg_clone.enabled {
+                    let _ = ctx.watcher_manager.start_named(name.to_string(), cfg_clone, ctx.event_tx.clone());
+                }
+                println!("[Watcher] destino actualizado: {}", name);
             } else {
-                None
-            };
-
-            let Some(cfg) = cloned else {
                 println!("[Watcher Error] No existe watcher: {}", name);
-                return true;
-            };
-
-            if let Err(e) = ctx.watchers_cfg.save() {
-                println!("[Watcher Error] No se pudo guardar watchers.json: {e}");
-                return true;
             }
-
-            ctx.watcher_manager.stop_named(name);
-
-            if cfg.enabled {
-                let _ = ctx
-                    .watcher_manager
-                    .start_named(name.to_string(), cfg, ctx.event_tx.clone());
-            }
-
-            println!("[Watcher] destino actualizado: {}", name);
-            true
         }
 
-        _ => {
-            println!(
-                "Comandos disponibles: {}, {}, {}, {}, {}, {}",
-                SUB_LIST, SUB_ADD, SUB_ENABLE, SUB_DISABLE, SUB_REMOVE, SUB_SETDEST
-            );
-            true
+        "help" | _ => {
+            println!("--- COMANDOS DE WATCHER ---");
+            println!("watcher list                    - Lista todos los watchers");
+            println!("watcher add <ruta>              - Crea un watcher nuevo");
+            println!("watcher enable <nombre>         - Habilita un watcher");
+            println!("watcher disable <nombre>        - Deshabilita un watcher");
+            println!("watcher remove <nombre>         - Elimina un watcher");
+            println!("watcher setdest <nombre> <ruta> - Cambia el destino de un watcher");
         }
     }
+
+    true
 }

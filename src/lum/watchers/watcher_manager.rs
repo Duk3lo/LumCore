@@ -14,7 +14,7 @@ use std::{
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::lum::config::watcher_config::WatcherConfig;
-use crate::lum::core::CoreEvent;
+use crate::lum::core_app::CoreEvent;
 
 use super::watcher::{initial_sync, is_temp_or_ignored, sync_entry, SyncAction, SyncState};
 

@@ -1,6 +1,10 @@
 use crate::lum::commands::{self, CoreContext};
 use crate::lum::config::jar_config::{ConfigLocation, ServerConfig};
 use crate::lum::config::watcher_config::WatchersConfig;
+use crate::lum::config::curseforge_config::CurseForgeConfig;
+use crate::lum::config::github_config::GitHubConfig;
+use crate::lum::config::updates_config::UpdatesConfig;
+use crate::lum::api::updater::UpdaterManager;
 use crate::lum::java_jar_runner::{JavaJarRunner, RunnerCommand};
 use crate::lum::watchers::watcher_manager::WatcherManager;
 use std::{
@@ -45,7 +49,33 @@ impl CoreApp {
             }
         };
 
+        let mut curseforge_cfg = match CurseForgeConfig::load_or_create() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                println!("[Core Error] Failed to load curseforge config: {}", e);
+                return;
+            }
+        };
+
+        let mut github_cfg = match GitHubConfig::load_or_create() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                println!("[Core Error] Failed to load github config: {}", e);
+                return;
+            }
+        };
+
+        let mut updates_cfg = match UpdatesConfig::load_or_create() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                println!("[Core Error] Failed to load updates config: {}", e);
+                return;
+            }
+        };
+
         let mut watcher_manager = WatcherManager::new();
+        let mut updater_manager = UpdaterManager::new();
+        updater_manager.start(updates_cfg.clone());
 
         let (core_tx, core_rx) = mpsc::channel::<CoreEvent>();
 
@@ -76,7 +106,6 @@ impl CoreApp {
 
         println!("[Core] Ready.");
         println!("Type commands to send to the server (type 'exit' to quit).");
-        println!("[Core] Commands:");
         commands::print_help();
 
         loop {
@@ -94,6 +123,13 @@ impl CoreApp {
 
                     if cmd == "exit" || cmd == "stop" {
                         println!("[Core] Shutting down...");
+                        
+                        let _ = curseforge_cfg.save();
+                        let _ = github_cfg.save();
+                        let _ = updates_cfg.save();
+                        let _ = server_cfg.save();
+
+                        updater_manager.stop();
                         Self::stop_server(&mut server_runtime);
                         watcher_manager.stop_all();
                         break;
@@ -102,12 +138,23 @@ impl CoreApp {
                     let mut ctx = CoreContext {
                         server_cfg: &mut server_cfg,
                         watchers_cfg: &mut watchers_cfg,
+                        curseforge_cfg: &mut curseforge_cfg, 
+                        github_cfg: &mut github_cfg,
+                        updates_cfg: &mut updates_cfg, 
+                        updater_manager: &mut updater_manager,
                         watcher_manager: &mut watcher_manager,
                         server_runtime: &mut server_runtime,
                         event_tx: &core_tx,
                     };
 
                     if commands::dispatch(cmd, &mut ctx) {
+                        if cmd.starts_with("cf ") {
+                            let _ = ctx.curseforge_cfg.save();
+                        } else if cmd.starts_with("gh ") {
+                            let _ = ctx.github_cfg.save();
+                        } else if cmd.starts_with("core updater") {
+                            let _ = ctx.updates_cfg.save();
+                        }
                         continue;
                     }
 
@@ -150,11 +197,7 @@ impl CoreApp {
             }
         }
 
-        println!("[Core] Waiting shutdown...");
-        Self::stop_server(&mut server_runtime);
-        watcher_manager.stop_all();
-        println!("--- Everything is safely shut down.");
-        println!("Goodbye! ---");
+        println!("--- Everything is safely shut down. Goodbye! ---");
     }
 
     pub(crate) fn parse_args(rest: &str) -> Vec<String> {
