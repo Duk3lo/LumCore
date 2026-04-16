@@ -51,7 +51,6 @@ impl UpdaterManager {
             }));
         }
 
-        // --- Hilo de GitHub ---
         if config.github.enable {
             let interval = Self::parse_time(&config.github.check_interval);
             let running_gh = self.running.clone();

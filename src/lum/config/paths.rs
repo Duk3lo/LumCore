@@ -31,7 +31,6 @@ pub fn ensure_base_hierarchy() -> Result<(PathBuf, PathBuf), String> {
     let workspace = workspace_dir()?;
     let syncmods = workspace.join(SYNC_MODS_DIR);
 
-    // Creamos todas las carpetas internas
     let cf_downloads = workspace.join("curseforge").join("downloads");
     let cf_backups = workspace.join("curseforge").join("backups");
     let gh_downloads = workspace.join("github").join("downloads");
