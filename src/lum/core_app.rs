@@ -1,12 +1,15 @@
+use crate::lum::api::updater::UpdaterManager;
 use crate::lum::commands::{self, CoreContext};
-use crate::lum::config::jar_config::{ConfigLocation, ServerConfig};
-use crate::lum::config::watcher_config::WatchersConfig;
 use crate::lum::config::curseforge_config::CurseForgeConfig;
 use crate::lum::config::github_config::GitHubConfig;
+use crate::lum::config::healing_config::HealingConfig;
+use crate::lum::config::jar_config::{ConfigLocation, ServerConfig};
 use crate::lum::config::updates_config::UpdatesConfig;
-use crate::lum::api::updater::UpdaterManager;
+use crate::lum::config::watcher_config::WatchersConfig;
+use crate::lum::health::health_monitor::HealthMonitor;
 use crate::lum::java_jar_runner::{JavaJarRunner, RunnerCommand};
 use crate::lum::watchers::watcher_manager::WatcherManager;
+
 use std::{
     fs,
     io::{self, BufRead},
@@ -27,51 +30,23 @@ pub struct ServerRuntime {
 pub enum CoreEvent {
     UserCommand(String),
     RestartRequested { changed_path: PathBuf },
+    ServerLog(String),
 }
 
 impl CoreApp {
     pub fn start() {
         println!("--- Starting CoreNexus (Rust Edition) ---");
 
-        let mut server_cfg = match ServerConfig::load_or_create(ConfigLocation::Local) {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                println!("[Core Error] Failed to load server config: {}", e);
-                return;
-            }
-        };
+        let mut server_cfg =
+            ServerConfig::load_or_create(ConfigLocation::Local).unwrap_or_default();
+        let mut watchers_cfg = WatchersConfig::load_or_create().unwrap();
+        let mut curseforge_cfg = CurseForgeConfig::load_or_create().unwrap();
+        let mut github_cfg = GitHubConfig::load_or_create().unwrap();
+        let mut updates_cfg = UpdatesConfig::load_or_create().unwrap();
 
-        let mut watchers_cfg = match WatchersConfig::load_or_create() {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                println!("[Core Error] Failed to load watchers config: {}", e);
-                return;
-            }
-        };
-
-        let mut curseforge_cfg = match CurseForgeConfig::load_or_create() {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                println!("[Core Error] Failed to load curseforge config: {}", e);
-                return;
-            }
-        };
-
-        let mut github_cfg = match GitHubConfig::load_or_create() {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                println!("[Core Error] Failed to load github config: {}", e);
-                return;
-            }
-        };
-
-        let mut updates_cfg = match UpdatesConfig::load_or_create() {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                println!("[Core Error] Failed to load updates config: {}", e);
-                return;
-            }
-        };
+        let mut healing_cfg = HealingConfig::load_or_create().unwrap_or_default();
+        let mut health_monitor = HealthMonitor::new();
+        health_monitor.start(&healing_cfg);
 
         let mut watcher_manager = WatcherManager::new();
         let mut updater_manager = UpdaterManager::new();
@@ -97,101 +72,114 @@ impl CoreApp {
             }
         });
 
-        if let Err(e) = watcher_manager.start_all(&watchers_cfg, core_tx.clone()) {
-            println!("[Core Warning] Some watchers could not start: {}", e);
-        }
+        let _ = watcher_manager.start_all(&watchers_cfg, core_tx.clone());
 
         let mut server_runtime: Option<ServerRuntime> = None;
         let mut last_restart = Instant::now() - Duration::from_secs(10);
 
-        println!("[Core] Ready.");
-        println!("Type commands to send to the server (type 'exit' to quit).");
+        println!("[Core] Ready. Type commands (type 'exit' to quit).");
         commands::print_help();
 
         loop {
-            let event = match core_rx.recv() {
-                Ok(ev) => ev,
+            let event_opt = match core_rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(ev) => Some(ev),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
                 Err(_) => break,
             };
 
-            match event {
-                CoreEvent::UserCommand(input) => {
-                    let cmd = input.trim();
-                    if cmd.is_empty() {
-                        continue;
-                    }
+            health_monitor.tick(
+                &healing_cfg,
+                &mut server_runtime,
+                &server_cfg,
+                core_tx.clone(),
+            );
 
-                    if cmd == "exit" || cmd == "stop" {
-                        println!("[Core] Shutting down...");
-                        
-                        let _ = curseforge_cfg.save();
-                        let _ = github_cfg.save();
-                        let _ = updates_cfg.save();
-                        let _ = server_cfg.save();
-
-                        updater_manager.stop();
-                        Self::stop_server(&mut server_runtime);
-                        watcher_manager.stop_all();
-                        break;
-                    }
-
-                    let mut ctx = CoreContext {
-                        server_cfg: &mut server_cfg,
-                        watchers_cfg: &mut watchers_cfg,
-                        curseforge_cfg: &mut curseforge_cfg, 
-                        github_cfg: &mut github_cfg,
-                        updates_cfg: &mut updates_cfg, 
-                        updater_manager: &mut updater_manager,
-                        watcher_manager: &mut watcher_manager,
-                        server_runtime: &mut server_runtime,
-                        event_tx: &core_tx,
-                    };
-
-                    if commands::dispatch(cmd, &mut ctx) {
-                        if cmd.starts_with("cf ") {
-                            let _ = ctx.curseforge_cfg.save();
-                        } else if cmd.starts_with("gh ") {
-                            let _ = ctx.github_cfg.save();
-                        } else if cmd.starts_with("core updater") {
-                            let _ = ctx.updates_cfg.save();
+            if let Some(event) = event_opt {
+                match event {
+                    CoreEvent::UserCommand(input) => {
+                        let cmd = input.trim();
+                        if cmd.is_empty() {
+                            continue;
                         }
-                        continue;
+
+                        if cmd == "exit" || cmd == "stop" {
+                            println!("[Core] Shutting down...");
+                            let _ = curseforge_cfg.save();
+                            let _ = github_cfg.save();
+                            let _ = updates_cfg.save();
+                            let _ = healing_cfg.save();
+                            let _ = server_cfg.save();
+
+                            health_monitor.stop();
+                            updater_manager.stop();
+                            Self::stop_server(&mut server_runtime);
+                            watcher_manager.stop_all();
+                            break;
+                        }
+
+                        let mut ctx = CoreContext {
+                            server_cfg: &mut server_cfg,
+                            watchers_cfg: &mut watchers_cfg,
+                            curseforge_cfg: &mut curseforge_cfg,
+                            github_cfg: &mut github_cfg,
+                            updates_cfg: &mut updates_cfg,
+                            healing_cfg: &mut healing_cfg,
+                            health_monitor: &mut health_monitor,
+                            updater_manager: &mut updater_manager,
+                            watcher_manager: &mut watcher_manager,
+                            server_runtime: &mut server_runtime,
+                            event_tx: &core_tx,
+                        };
+
+                        if commands::dispatch(cmd, &mut ctx) {
+                            if cmd.starts_with("core healing") {
+                                let _ = ctx.healing_cfg.save();
+                            }
+                            continue;
+                        }
+
+                        if let Some(runtime) = ctx.server_runtime.as_ref() {
+                            let _ = runtime.tx.send(RunnerCommand::Input(cmd.to_string()));
+                        } else {
+                            println!("[Core] No hay servidor activo. Usa 'jar start'.");
+                        }
                     }
 
-                    if let Some(runtime) = ctx.server_runtime.as_ref() {
-                        let _ = runtime
-                            .tx
-                            .send(RunnerCommand::Input(cmd.to_string()));
-                    } else {
-                        println!("[Core] No hay servidor activo.");
-                        println!("Usa 'jar start' primero.");
-                    }
-                }
+                    CoreEvent::RestartRequested { changed_path } => {
+                        if last_restart.elapsed() < Duration::from_millis(1200) {
+                            println!("[Watcher] Reinicio omitido por rebote: {:?}", changed_path);
+                            continue;
+                        }
 
-                CoreEvent::RestartRequested { changed_path } => {
-                    if last_restart.elapsed() < Duration::from_millis(1200) {
-                        println!(
-                            "[Watcher] Reinicio omitido por rebote: {:?}",
-                            changed_path
+                        last_restart = Instant::now();
+                        println!("[Watcher] Reiniciando por cambio en: {:?}", changed_path);
+
+                        let was_running = server_runtime.is_some();
+                        if was_running {
+                            Self::stop_server(&mut server_runtime);
+                        }
+
+                        if server_cfg.auto_restart || was_running {
+                            if let Err(e) = Self::start_server(
+                                &server_cfg,
+                                &mut server_runtime,
+                                core_tx.clone(),
+                            ) {
+                                println!("[Core Error] {e}");
+                            } else {
+                                health_monitor.notify_server_started();
+                            }
+                        }
+                    }
+
+                    CoreEvent::ServerLog(line) => {
+                        health_monitor.process_server_log(
+                            &line,
+                            &healing_cfg,
+                            &mut server_runtime,
+                            &server_cfg,
+                            core_tx.clone(),
                         );
-                        continue;
-                    }
-
-                    last_restart = Instant::now();
-                    println!(
-                        "[Watcher] Cambio listo, reiniciando por {:?}...",
-                        changed_path
-                    );
-
-                    let was_running = server_runtime.is_some();
-                    if was_running {
-                        Self::stop_server(&mut server_runtime);
-                    }
-
-                    if server_cfg.auto_restart || was_running {
-                        if let Err(e) = Self::start_server(&server_cfg, &mut server_runtime) {
-                            println!("[Core Error] No se pudo reiniciar el servidor: {e}");
-                        }
                     }
                 }
             }
@@ -285,17 +273,17 @@ impl CoreApp {
     pub(crate) fn start_server(
         server_cfg: &ServerConfig,
         server_runtime: &mut Option<ServerRuntime>,
+        core_tx: mpsc::Sender<CoreEvent>,
     ) -> Result<(), String> {
         if server_runtime.is_some() {
-            return Err("El servidor ya está en ejecución".to_string());
+            return Err("Ya está en ejecución".to_string());
         }
 
         let runner = JavaJarRunner::from_config(server_cfg)?;
         let (tx, rx) = mpsc::channel::<RunnerCommand>();
 
         let handle = thread::spawn(move || {
-            println!("[Core] Launching background thread for JAR...");
-            runner.start_and_read(rx);
+            runner.start_and_read(rx, core_tx);
         });
 
         *server_runtime = Some(ServerRuntime { tx, handle });

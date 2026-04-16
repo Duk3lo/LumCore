@@ -2,12 +2,13 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc::{Receiver, RecvTimeoutError},
+    sync::mpsc::{Receiver, RecvTimeoutError, Sender},
     thread,
     time::Duration,
 };
 
 use super::config::jar_config::ServerConfig;
+use crate::lum::core_app::CoreEvent;
 
 #[derive(Debug, Clone)]
 pub enum RunnerCommand {
@@ -54,7 +55,7 @@ impl JavaJarRunner {
         })
     }
 
-    pub fn start_and_read(&self, rx: Receiver<RunnerCommand>) {
+    pub fn start_and_read(&self, rx: Receiver<RunnerCommand>, core_tx: Sender<CoreEvent>) {
         println!("Starting JAR: {}", self.jar_name);
         println!("Working directory: {:?}", self.jar_dir);
 
@@ -88,11 +89,15 @@ impl JavaJarRunner {
         };
 
         let stdout_handle = child.stdout.take().map(|out| {
+            let tx = core_tx.clone();
             thread::spawn(move || {
                 let reader = BufReader::new(out);
                 for line in reader.lines() {
                     match line {
-                        Ok(text) => println!("[JAR OUT] {}", text),
+                        Ok(text) => {
+                            println!("[JAR OUT] {}", text);
+                            let _ = tx.send(CoreEvent::ServerLog(text));
+                        }
                         Err(e) => {
                             println!("Error reading stdout: {}", e);
                             break;

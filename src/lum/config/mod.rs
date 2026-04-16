@@ -4,3 +4,4 @@ pub mod watcher_config;
 pub mod curseforge_config;
 pub mod github_config;
 pub mod updates_config;
+pub mod healing_config;

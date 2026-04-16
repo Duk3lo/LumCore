@@ -20,16 +20,12 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
         }
 
         "updater" => {
+            // ... (Tu código de updater sin cambios) ...
             let action = parts.next().unwrap_or("help").to_lowercase();
             let target = parts.next().unwrap_or("").to_lowercase();
 
             match action.as_str() {
                 "enable" | "disable" => {
-                    if target.is_empty() {
-                        println!("[Updater] Uso: core updater {} <github|curseforge|server|all>", action);
-                        return true;
-                    }
-
                     let state = action == "enable";
                     let mut modified = false;
 
@@ -52,23 +48,40 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
                     }
                 }
                 "restart" => {
-                    println!("[Updater] Reiniciando tareas en segundo plano...");
                     ctx.updater_manager.stop();
                     ctx.updater_manager.start(ctx.updates_cfg.clone());
-                    println!("[Updater] Schedulers aplicados correctamente.");
+                    println!("[Updater] Reiniciando tareas...");
                 }
-                "stop" => {
-                    ctx.updater_manager.stop();
+                "stop" => ctx.updater_manager.stop(),
+                "start" => ctx.updater_manager.start(ctx.updates_cfg.clone()),
+                "help" | _ => println!("Comandos: enable/disable <target>, restart, stop, start")
+            }
+        }
+
+        // --- NUEVO COMANDO HEALING ---
+        "healing" => {
+            let action = parts.next().unwrap_or("status").to_lowercase();
+
+            match action.as_str() {
+                "status" => {
+                    let is_active = ctx.server_runtime.is_some();
+                    ctx.health_monitor.print_health_status(is_active);
                 }
-                "start" => {
-                    ctx.updater_manager.start(ctx.updates_cfg.clone());
+                "enable" => {
+                    ctx.healing_cfg.enable = true;
+                    ctx.health_monitor.start(ctx.healing_cfg);
+                    println!("[Core] Health monitor ACTIVADO.");
+                }
+                "disable" => {
+                    ctx.healing_cfg.enable = false;
+                    ctx.health_monitor.stop();
+                    println!("[Core] Health monitor DESACTIVADO.");
                 }
                 "help" | _ => {
-                    println!("--- COMANDOS DE CORE UPDATER ---");
-                    println!("core updater enable <target>  - Activa autoupdate (github, curseforge, server, all)");
-                    println!("core updater disable <target> - Desactiva autoupdate");
-                    println!("core updater restart          - Aplica los cambios y reinicia los hilos");
-                    println!("core updater stop             - Detiene todos los chequeos automáticos");
+                    println!("--- COMANDOS DE HEALING ---");
+                    println!("core healing status  - Muestra la salud de CPU/RAM y estado del monitor");
+                    println!("core healing enable  - Activa autochequeo de TPS y tiempos");
+                    println!("core healing disable - Desactiva autochequeo");
                 }
             }
         }

@@ -11,6 +11,7 @@ pub const WATCHERS_CONFIG_FILE: &str = "watchers.json";
 pub const CURSEFORGE_CONFIG_FILE: &str = "curseforge_config.json";
 pub const GITHUB_CONFIG_FILE: &str = "github_config.json";
 pub const UPDATES_CONFIG_FILE: &str = "updates_config.json";
+pub const HEALING_CONFIG_FILE: &str = "healing_config.json";
 
 pub fn base_config_dir() -> Result<PathBuf, String> {
     let exe_path = env::current_exe()

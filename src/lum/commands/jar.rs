@@ -9,7 +9,9 @@ fn refresh_default_watcher(ctx: &mut CoreContext) {
     if let Some(w_cfg) = ctx.watchers_cfg.watchers.get("default").cloned() {
         ctx.watcher_manager.stop_named("default");
         if w_cfg.enabled {
-            let _ = ctx.watcher_manager.start_named("default".to_string(), w_cfg, ctx.event_tx.clone());
+            let _ = ctx
+                .watcher_manager
+                .start_named("default".to_string(), w_cfg, ctx.event_tx.clone());
         }
     }
 }
@@ -41,9 +43,16 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
                 Ok(msg) => {
                     println!("{msg}");
                     refresh_default_watcher(ctx);
+
                     if was_running {
-                        if let Err(e) = CoreApp::start_server(ctx.server_cfg, ctx.server_runtime) {
+                        if let Err(e) = CoreApp::start_server(
+                            ctx.server_cfg,
+                            ctx.server_runtime,
+                            ctx.event_tx.clone(),
+                        ) {
                             println!("[Core Error] {e}");
+                        } else {
+                            ctx.health_monitor.notify_server_started();
                         }
                     }
                 }
@@ -58,7 +67,9 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
             }
 
             let was_running = ctx.server_runtime.is_some();
-            if was_running { CoreApp::stop_server(ctx.server_runtime); }
+            if was_running {
+                CoreApp::stop_server(ctx.server_runtime);
+            }
 
             let jar_path = full_args.trim();
             if !jar_path.to_lowercase().ends_with(".jar") {
@@ -76,8 +87,14 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
             refresh_default_watcher(ctx);
 
             if was_running {
-                if let Err(e) = CoreApp::start_server(ctx.server_cfg, ctx.server_runtime) {
+                if let Err(e) = CoreApp::start_server(
+                    ctx.server_cfg,
+                    ctx.server_runtime,
+                    ctx.event_tx.clone(),
+                ) {
                     println!("[Core Error] {e}");
+                } else {
+                    ctx.health_monitor.notify_server_started();
                 }
             }
         }
@@ -95,8 +112,14 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
         }
 
         "start" => {
-            if let Err(e) = CoreApp::start_server(ctx.server_cfg, ctx.server_runtime) {
+            if let Err(e) = CoreApp::start_server(
+                ctx.server_cfg,
+                ctx.server_runtime,
+                ctx.event_tx.clone(),
+            ) {
                 println!("[Core Error] {e}");
+            } else {
+                ctx.health_monitor.notify_server_started();
             }
         }
 
