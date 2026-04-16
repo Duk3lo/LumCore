@@ -1,11 +1,10 @@
-// src/lum/commands/curseforge.rs
 use super::CoreContext;
 use crate::lum::api::curseforge_api::CurseForgeClient;
 use crate::lum::config::curseforge_config::CurseForgeResource;
+use crate::lum::config::paths;
 
 const PREFIX: &str = "cf";
 
-// Función auxiliar para sanitizar nombres de mods (igual que tu regex en Java)
 fn sanitize_key(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
@@ -38,7 +37,8 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
                         if ctx.curseforge_cfg.resources.contains_key(&key) {
                             println!("[CurseForge] El mod '{}' ya está registrado.", key);
                         } else {
-                            let new_res = CurseForgeResource::new(id, "mods".to_string());
+                            // AQUÍ ESTÁ EL CAMBIO IMPORTANTE: Destino 'syncmods'
+                            let new_res = CurseForgeResource::new(id, paths::SYNC_MODS_DIR.to_string());
                             ctx.curseforge_cfg.resources.insert(key.clone(), new_res);
                             println!("[CurseForge] PROCEDER CON LA INSTALACIÓN: {} (ID: {})", mod_info.name, id);
                         }
@@ -54,7 +54,8 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
                         } else if results.len() == 1 {
                             println!("[CurseForge] Único resultado exacto. Añadiendo ID {}...", results[0].id);
                             let key = sanitize_key(&results[0].name);
-                            let new_res = CurseForgeResource::new(results[0].id, "mods".to_string());
+                            // AQUÍ TAMBIÉN: Destino 'syncmods'
+                            let new_res = CurseForgeResource::new(results[0].id, paths::SYNC_MODS_DIR.to_string());
                             ctx.curseforge_cfg.resources.insert(key, new_res);
                         } else {
                             println!("========================================");
@@ -191,7 +192,6 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
         "sync-all" => {
             println!("[CurseForge] Sincronizando todos los mods activos...");
             
-            // Auto-detectar archivos no registrados si está activado
             if ctx.curseforge_cfg.auto_search_untracked_mods {
                 println!("[CurseForge] (Nota: auto-search está activado. Añade mods no rastreados con 'cf add <nombre>' si ves advertencias en el log).");
             }

@@ -1,4 +1,5 @@
 use crate::lum::config::curseforge_config::CurseForgeResource;
+use crate::lum::config::paths;
 use anyhow::{anyhow, Result};
 use chrono::Local;
 use md5::{Digest as Md5Digest, Md5};
@@ -90,10 +91,13 @@ impl CurseForgeClient {
         resource: &mut CurseForgeResource,
         mod_key: &str,
     ) -> Result<bool> {
+        let workspace = paths::workspace_dir().map_err(|e| anyhow!(e))?;
+        let dest_dir = paths::resolve(&workspace, &resource.destination_path)
+            .unwrap_or_else(|| PathBuf::from(&resource.destination_path));
+
         let mod_info = self.get_mod_info(resource.project_id)?;
         let file_info = self.get_file_info(resource.project_id, mod_info.main_file_id)?;
 
-        let dest_dir = PathBuf::from(&resource.destination_path);
         let local_file = resource.local_file_name.as_ref().map(|n| dest_dir.join(n));
 
         if resource.local_file_id == file_info.id {
@@ -111,8 +115,10 @@ impl CurseForgeClient {
 
         println!("[CurseForge] Descargando actualización: {}...", file_info.file_name);
 
-        let downloads_dir = PathBuf::from("downloads");
+        let cf_dir = workspace.join("curseforge");
+        let downloads_dir = cf_dir.join("downloads");
         fs::create_dir_all(&downloads_dir)?;
+        
         let temp_file_path = downloads_dir.join(&file_info.file_name);
 
         let mut response = self.client.get(&download_url).send()?.error_for_status()?;
@@ -129,7 +135,7 @@ impl CurseForgeClient {
             if let Some(old_name) = &resource.local_file_name {
                 let old_path = dest_dir.join(old_name);
                 if old_path.exists() {
-                    let backup_dir = PathBuf::from("backups").join(mod_key);
+                    let backup_dir = cf_dir.join("backups").join(mod_key);
                     fs::create_dir_all(&backup_dir)?;
                     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
                     let backup_path = backup_dir.join(format!("{}.backup_{}", old_name, timestamp));
@@ -149,12 +155,13 @@ impl CurseForgeClient {
         resource.local_file_id = file_info.id;
         resource.local_file_name = Some(file_info.file_name.clone());
 
-        println!("[CurseForge] ✅ '{}' actualizado correctamente.", mod_key);
+        println!("[CurseForge] ✅ '{}' actualizado y movido a syncmods.", mod_key);
         Ok(true)
     }
 
     pub fn restore_latest_backup(&self, resource: &mut CurseForgeResource, mod_key: &str) -> Result<()> {
-        let backup_dir = PathBuf::from("backups").join(mod_key);
+        let workspace = paths::workspace_dir().map_err(|e| anyhow!(e))?;
+        let backup_dir = workspace.join("curseforge").join("backups").join(mod_key);
         
         if !backup_dir.exists() {
             return Err(anyhow!("No hay carpeta de backups para '{}'", mod_key));
@@ -163,7 +170,6 @@ impl CurseForgeClient {
         let mut latest_file = None;
         let mut latest_time = std::time::UNIX_EPOCH;
 
-        // Buscamos el archivo modificado más recientemente
         for entry in fs::read_dir(&backup_dir)? {
             let entry = entry?;
             let meta = entry.metadata()?;
@@ -178,26 +184,23 @@ impl CurseForgeClient {
 
         if let Some(backup_path) = latest_file {
             let file_name = backup_path.file_name().unwrap().to_string_lossy().to_string();
-            
-            // Extraemos el nombre original quitando ".backup_YYYYMMDD_HHMMSS"
             let original_name = if let Some(idx) = file_name.find(".backup_") {
                 &file_name[..idx]
             } else {
                 &file_name
             };
 
-            let dest_dir = PathBuf::from(&resource.destination_path);
+            let dest_dir = paths::resolve(&workspace, &resource.destination_path)
+                .unwrap_or_else(|| PathBuf::from(&resource.destination_path));
             fs::create_dir_all(&dest_dir)?;
 
-            // Borramos el mod actual si existe
             if let Some(curr) = &resource.local_file_name {
                 let _ = fs::remove_file(dest_dir.join(curr));
             }
 
-            // Restauramos
             fs::copy(&backup_path, dest_dir.join(original_name))?;
             resource.local_file_name = Some(original_name.to_string());
-            resource.local_file_id = 0; // Reseteamos ID para que actualice en el futuro
+            resource.local_file_id = 0; 
 
             println!("[CurseForge] ✅ Mod restaurado exitosamente desde backup: {}", original_name);
             Ok(())

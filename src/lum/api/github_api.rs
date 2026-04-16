@@ -1,4 +1,5 @@
 use crate::lum::config::github_config::RepositoryResource;
+use crate::lum::config::paths;
 use anyhow::{anyhow, Result};
 use chrono::Local;
 use reqwest::blocking::Client;
@@ -53,7 +54,10 @@ impl GitHubClient {
     pub fn download_and_replace(&self, resource: &mut RepositoryResource, mod_key: &str) -> Result<bool> {
         let release = self.get_latest_release(&resource.repo_slug, &resource.custom_token)?;
         
-        let dest_dir = PathBuf::from(&resource.destination_path);
+        let workspace = paths::workspace_dir().map_err(|e| anyhow!(e))?;
+        let dest_dir = paths::resolve(&workspace, &resource.destination_path)
+            .unwrap_or_else(|| PathBuf::from(&resource.destination_path));
+
         let local_file = resource.local_file_name.as_ref().map(|n| dest_dir.join(n));
         let file_exists = local_file.as_ref().map_or(false, |p| p.exists());
 
@@ -77,8 +81,10 @@ impl GitHubClient {
 
         println!("[GitHub] Descargando actualización: {}...", target_asset.name);
 
-        let downloads_dir = PathBuf::from("downloads");
+        let gh_dir = workspace.join("github");
+        let downloads_dir = gh_dir.join("downloads");
         fs::create_dir_all(&downloads_dir)?;
+        
         let temp_file_path = downloads_dir.join(&target_asset.name);
 
         let mut req = self.client.get(&target_asset.browser_download_url).header(USER_AGENT, "LumCore-Rust");
@@ -100,7 +106,7 @@ impl GitHubClient {
             if let Some(old_name) = &resource.local_file_name {
                 let old_path = dest_dir.join(old_name);
                 if old_path.exists() {
-                    let backup_dir = PathBuf::from("backups").join(mod_key);
+                    let backup_dir = gh_dir.join("backups").join(mod_key);
                     fs::create_dir_all(&backup_dir)?;
                     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
                     fs::copy(&old_path, backup_dir.join(format!("{}.backup_{}", old_name, timestamp)))?;
@@ -118,12 +124,14 @@ impl GitHubClient {
         resource.local_file_name = Some(target_asset.name);
         resource.last_verified_hash = new_hash;
 
-        println!("[GitHub] ✅ '{}' actualizado correctamente.", mod_key);
+        println!("[GitHub] ✅ '{}' actualizado y movido a syncmods.", mod_key);
         Ok(true)
     }
 
     pub fn restore_latest_backup(&self, resource: &mut RepositoryResource, mod_key: &str) -> Result<()> {
-        let backup_dir = PathBuf::from("backups").join(mod_key);
+        let workspace = paths::workspace_dir().map_err(|e| anyhow!(e))?;
+        let backup_dir = workspace.join("github").join("backups").join(mod_key);
+        
         if !backup_dir.exists() { return Err(anyhow!("No hay backups para '{}'", mod_key)); }
 
         let mut latest_file = None;
@@ -142,7 +150,9 @@ impl GitHubClient {
             let file_name = backup_path.file_name().unwrap().to_string_lossy().to_string();
             let original_name = if let Some(idx) = file_name.find(".backup_") { &file_name[..idx] } else { &file_name };
 
-            let dest_dir = PathBuf::from(&resource.destination_path);
+            let dest_dir = paths::resolve(&workspace, &resource.destination_path)
+                .unwrap_or_else(|| PathBuf::from(&resource.destination_path));
+
             if let Some(curr) = &resource.local_file_name { let _ = fs::remove_file(dest_dir.join(curr)); }
 
             fs::copy(&backup_path, dest_dir.join(original_name))?;

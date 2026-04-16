@@ -1,6 +1,7 @@
 use super::CoreContext;
 use crate::lum::api::github_api::GitHubClient;
 use crate::lum::config::github_config::RepositoryResource;
+use crate::lum::config::paths;
 
 const PREFIX: &str = "gh";
 
@@ -23,7 +24,8 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
             if ctx.github_cfg.resources.contains_key(&key) {
                 println!("[GitHub] El repositorio '{}' ya existe.", key);
             } else {
-                let res = RepositoryResource::new(arg.clone(), "mods".to_string());
+                // CAMBIO AQUÍ: Destino "syncmods"
+                let res = RepositoryResource::new(arg.clone(), paths::SYNC_MODS_DIR.to_string());
                 ctx.github_cfg.resources.insert(key.clone(), res);
                 println!("[GitHub] Registrado: {} como '{}'.", arg, key);
             }

@@ -31,10 +31,26 @@ pub fn ensure_base_hierarchy() -> Result<(PathBuf, PathBuf), String> {
     let workspace = workspace_dir()?;
     let syncmods = workspace.join(SYNC_MODS_DIR);
 
+    // Creamos todas las carpetas internas
+    let cf_downloads = workspace.join("curseforge").join("downloads");
+    let cf_backups = workspace.join("curseforge").join("backups");
+    let gh_downloads = workspace.join("github").join("downloads");
+    let gh_backups = workspace.join("github").join("backups");
+
     fs::create_dir_all(&workspace)
         .map_err(|e| format!("No pude crear el directorio base ({}): {}", MAIN_DIR, e))?;
     fs::create_dir_all(&syncmods)
         .map_err(|e| format!("No pude crear el directorio syncmods: {e}"))?;
+
+    fs::create_dir_all(&cf_downloads)
+        .map_err(|e| format!("No pude crear curseforge/downloads: {e}"))?;
+    fs::create_dir_all(&cf_backups)
+        .map_err(|e| format!("No pude crear curseforge/backups: {e}"))?;
+
+    fs::create_dir_all(&gh_downloads)
+        .map_err(|e| format!("No pude crear github/downloads: {e}"))?;
+    fs::create_dir_all(&gh_backups)
+        .map_err(|e| format!("No pude crear github/backups: {e}"))?;
 
     Ok((workspace, syncmods))
 }

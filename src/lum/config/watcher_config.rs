@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-// Importamos lo necesario de módulos hermanos
 use super::paths::{WATCHERS_CONFIG_FILE, ensure_base_hierarchy};
 use super::jar_config::{ConfigLocation, ServerConfig};
 
