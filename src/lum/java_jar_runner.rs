@@ -63,17 +63,13 @@ impl JavaJarRunner {
         command.current_dir(&self.jar_dir);
 
         for jvm_arg in &self.jvm_args {
-            if !jvm_arg.is_empty() {
-                command.arg(jvm_arg);
-            }
+            if !jvm_arg.is_empty() { command.arg(jvm_arg); }
         }
 
         command.arg("-jar").arg(&self.jar_name);
 
         for jar_arg in &self.jar_args {
-            if !jar_arg.is_empty() {
-                command.arg(jar_arg);
-            }
+            if !jar_arg.is_empty() { command.arg(jar_arg); }
         }
 
         command.stdout(Stdio::piped());
@@ -98,7 +94,7 @@ impl JavaJarRunner {
                 for line in reader.lines() {
                     match line {
                         Ok(text) => {
-                            println!("[JAR OUT] {}", text);
+                            println!("[JAR] {}", text);
                             let _ = tx.send(CoreEvent::ServerLog(text));
                         }
                         Err(e) => {
@@ -145,9 +141,7 @@ impl JavaJarRunner {
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    stop_requested = true;
-                }
+                Err(RecvTimeoutError::Disconnected) => { stop_requested = true; }
             }
 
             match child.try_wait() {
@@ -171,21 +165,13 @@ impl JavaJarRunner {
                     }
                 }
 
-                if let Ok(None) = child.try_wait() {
-                    let _ = child.kill();
-                }
-
+                if let Ok(None) = child.try_wait() { let _ = child.kill(); }
                 let _ = child.wait();
                 break;
             }
         }
 
-        if let Some(handle) = stdout_handle {
-            let _ = handle.join();
-        }
-
-        if let Some(handle) = stderr_handle {
-            let _ = handle.join();
-        }
+        if let Some(handle) = stdout_handle { let _ = handle.join(); }
+        if let Some(handle) = stderr_handle { let _ = handle.join(); }
     }
 }
