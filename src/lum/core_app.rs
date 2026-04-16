@@ -30,6 +30,7 @@ pub struct ServerRuntime {
 pub enum CoreEvent {
     UserCommand(String),
     RestartRequested { changed_path: PathBuf },
+    ServerStarted { pid: u32 },
     ServerLog(String),
 }
 
@@ -166,10 +167,14 @@ impl CoreApp {
                                 core_tx.clone(),
                             ) {
                                 println!("[Core Error] {e}");
-                            } else {
-                                health_monitor.notify_server_started();
                             }
                         }
+                    }
+
+                    CoreEvent::ServerStarted { pid } => {
+                        health_monitor.set_server_pid(pid);
+                        health_monitor.notify_server_started();
+                        println!("[Core] PID del servidor detectado: {pid}");
                     }
 
                     CoreEvent::ServerLog(line) => {

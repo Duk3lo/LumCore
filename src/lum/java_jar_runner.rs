@@ -7,8 +7,8 @@ use std::{
     time::Duration,
 };
 
-use super::config::jar_config::ServerConfig;
 use crate::lum::core_app::CoreEvent;
+use super::config::jar_config::ServerConfig;
 
 #[derive(Debug, Clone)]
 pub enum RunnerCommand {
@@ -87,6 +87,9 @@ impl JavaJarRunner {
                 return;
             }
         };
+
+        let pid = child.id();
+        let _ = core_tx.send(CoreEvent::ServerStarted { pid });
 
         let stdout_handle = child.stdout.take().map(|out| {
             let tx = core_tx.clone();

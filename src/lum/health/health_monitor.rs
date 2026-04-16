@@ -13,6 +13,7 @@ use crate::lum::{
 };
 
 pub struct HealthMonitor {
+    server_pid: Option<u32>,
     server_start_time: Option<Instant>,
     tps_strikes: u32,
     last_check_time: Option<Instant>,
@@ -23,6 +24,7 @@ pub struct HealthMonitor {
 impl Default for HealthMonitor {
     fn default() -> Self {
         Self {
+            server_pid: None,
             server_start_time: None,
             tps_strikes: 0,
             last_check_time: None,
@@ -35,6 +37,10 @@ impl Default for HealthMonitor {
 impl HealthMonitor {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_server_pid(&mut self, pid: u32) {
+        self.server_pid = Some(pid);
     }
 
     pub fn start(&mut self, cfg: &HealingConfig) {
@@ -57,6 +63,7 @@ impl HealthMonitor {
 
     pub fn stop(&mut self) {
         self.enabled = false;
+        self.server_pid = None;
         self.server_start_time = None;
         self.tps_strikes = 0;
         self.last_check_time = None;
@@ -79,12 +86,6 @@ impl HealthMonitor {
     ) {
         if !self.enabled || !config.enable {
             return;
-        }
-
-        if server_runtime.is_some() && self.server_start_time.is_none() {
-            self.notify_server_started();
-        } else if server_runtime.is_none() && self.server_start_time.is_some() {
-            self.server_start_time = None;
         }
 
         let last = *self.last_check_time.get_or_insert_with(Instant::now);
@@ -227,7 +228,11 @@ impl HealthMonitor {
 
         println!(
             "[MONITOR] Estado    : {}",
-            if self.enabled { "✅ ACTIVO" } else { "❌ APAGADO" }
+            if self.enabled {
+                "✅ ACTIVO"
+            } else {
+                "❌ APAGADO"
+            }
         );
 
         if self.enabled {
@@ -240,15 +245,42 @@ impl HealthMonitor {
                 } else {
                     self.current_interval - elapsed
                 };
-                println!("[MONITOR] Prox. Check : en {}", format_time(remaining.as_secs()));
+                println!(
+                    "[MONITOR] Prox. Check : en {}",
+                    format_time(remaining.as_secs())
+                );
             }
+        }
+
+        if let Some(pid) = self.server_pid {
+            println!("[SERVER] PID       : {}", pid);
+            println!(
+                "[SERVER] RAM       : {}",
+                format_memory(&get_process_memory_usage(pid))
+            );
+            println!("[SERVER] CPU       : {}", get_process_cpu_usage(pid));
+            println!("[SERVER] Hilos     : {}", get_process_thread_count(pid));
+            println!("[SERVER] JVM Heap   : {}", get_jvm_heap_info(pid));
+        } else {
+            println!("[SERVER] PID       : N/A");
         }
 
         println!(
             "[SERVER] Estado    : {}",
-            if server_is_active { "✅ ACTIVO" } else { "❌ APAGADO" }
+            if server_is_active {
+                "✅ ACTIVO"
+            } else {
+                "❌ APAGADO"
+            }
         );
         println!("===================================");
+    }
+
+    pub fn server_stopped(&mut self) {
+        self.server_pid = None;
+        self.server_start_time = None;
+        self.tps_strikes = 0;
+        self.last_check_time = Some(Instant::now());
     }
 }
 
@@ -319,32 +351,23 @@ fn format_memory(kb_str: &str) -> String {
 }
 
 fn get_process_memory_usage(pid: u32) -> String {
-    let is_win = cfg!(windows);
-
-    let output = if is_win {
+    if cfg!(windows) {
         let filter = format!("PID eq {pid}");
-        Command::new("tasklist")
+        let output = Command::new("tasklist")
             .args(["/FI", filter.as_str(), "/FO", "CSV", "/NH"])
-            .output()
-    } else {
-        Command::new("ps")
-            .args(["-o", "rss=", "-p"])
-            .arg(pid.to_string())
-            .output()
-    };
+            .output();
 
-    let Ok(output) = output else {
-        return "N/A".to_string();
-    };
+        let Ok(output) = output else {
+            return "N/A".to_string();
+        };
 
-    let text = String::from_utf8_lossy(&output.stdout);
-    let line = text.lines().next().unwrap_or("").trim();
+        let text = String::from_utf8_lossy(&output.stdout);
+        let line = text.lines().next().unwrap_or("").trim();
 
-    if line.is_empty() {
-        return "N/A".to_string();
-    }
+        if line.is_empty() {
+            return "N/A".to_string();
+        }
 
-    if is_win {
         let cleaned = line
             .split(',')
             .last()
@@ -362,7 +385,129 @@ fn get_process_memory_usage(pid: u32) -> String {
             digits
         }
     } else {
-        line.to_string()
+        let output = Command::new("ps")
+            .args(["-o", "rss=", "-p"])
+            .arg(pid.to_string())
+            .output();
+
+        let Ok(output) = output else {
+            return "N/A".to_string();
+        };
+
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if text.is_empty() {
+            "N/A".to_string()
+        } else {
+            text
+        }
+    }
+}
+
+fn get_process_cpu_usage(pid: u32) -> String {
+    if cfg!(windows) {
+        let output = Command::new("wmic")
+            .args([
+                "path",
+                "Win32_PerfFormattedData_PerfProc_Process",
+                "where",
+                &format!("IDProcess={pid}"),
+                "get",
+                "PercentProcessorTime",
+            ])
+            .output();
+
+        let Ok(output) = output else {
+            return "N/A".to_string();
+        };
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.eq_ignore_ascii_case("PercentProcessorTime") {
+                continue;
+            }
+            return format!("{line}%");
+        }
+
+        "N/A".to_string()
+    } else {
+        let output = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "%cpu="])
+            .output();
+
+        let Ok(output) = output else {
+            return "N/A".to_string();
+        };
+
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if text.is_empty() {
+            "N/A".to_string()
+        } else {
+            format!("{text}%")
+        }
+    }
+}
+
+fn get_process_thread_count(pid: u32) -> String {
+    if cfg!(windows) {
+        let output = Command::new("wmic")
+            .args([
+                "process",
+                "where",
+                &format!("ProcessId={pid}"),
+                "get",
+                "ThreadCount",
+                "/value",
+            ])
+            .output();
+
+        let Ok(output) = output else {
+            return "N/A".to_string();
+        };
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let line = line.trim();
+            if let Some(value) = line.strip_prefix("ThreadCount=") {
+                return value.trim().to_string();
+            }
+        }
+
+        "N/A".to_string()
+    } else {
+        let output = Command::new("ps")
+            .args(["-o", "nlwp=", "-p"])
+            .arg(pid.to_string())
+            .output();
+
+        let Ok(output) = output else {
+            return "N/A".to_string();
+        };
+
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if text.is_empty() {
+            "N/A".to_string()
+        } else {
+            text
+        }
+    }
+}
+
+fn get_jvm_heap_info(pid: u32) -> String {
+    let output = Command::new("jcmd")
+        .arg(pid.to_string())
+        .arg("GC.heap_info")
+        .output();
+
+    let Ok(output) = output else {
+        return "N/A".to_string();
+    };
+
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        "N/A".to_string()
+    } else {
+        text
     }
 }
 
@@ -377,10 +522,6 @@ fn get_system_cpu_load() -> Option<String> {
             .ok()?;
 
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
+        if text.is_empty() { None } else { Some(text) }
     }
 }

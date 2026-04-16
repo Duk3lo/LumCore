@@ -4,7 +4,9 @@ use crate::lum::core_app::CoreApp;
 const PREFIX: &str = "jar";
 
 fn refresh_default_watcher(ctx: &mut CoreContext) {
-    let _ = ctx.watchers_cfg.update_default_destination(&ctx.server_cfg.jar_path);
+    let _ = ctx
+        .watchers_cfg
+        .update_default_destination(&ctx.server_cfg.jar_path);
 
     if let Some(w_cfg) = ctx.watchers_cfg.watchers.get("default").cloned() {
         ctx.watcher_manager.stop_named("default");
@@ -125,6 +127,7 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
 
         "stop" => {
             CoreApp::stop_server(ctx.server_runtime);
+            ctx.health_monitor.server_stopped();
             println!("[Core] Servidor detenido.");
         }
 
