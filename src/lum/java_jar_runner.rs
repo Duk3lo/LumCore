@@ -21,6 +21,7 @@ pub struct JavaJarRunner {
     jar_dir: PathBuf,
     jvm_args: Vec<String>,
     jar_args: Vec<String>,
+    auto_restart: bool,
 }
 
 impl JavaJarRunner {
@@ -52,6 +53,7 @@ impl JavaJarRunner {
             jar_dir,
             jvm_args: config.jvm_args.clone(),
             jar_args: config.jar_args.clone(),
+            auto_restart: config.auto_restart,
         })
     }
 
@@ -63,13 +65,17 @@ impl JavaJarRunner {
         command.current_dir(&self.jar_dir);
 
         for jvm_arg in &self.jvm_args {
-            if !jvm_arg.is_empty() { command.arg(jvm_arg); }
+            if !jvm_arg.is_empty() {
+                command.arg(jvm_arg);
+            }
         }
 
         command.arg("-jar").arg(&self.jar_name);
 
         for jar_arg in &self.jar_args {
-            if !jar_arg.is_empty() { command.arg(jar_arg); }
+            if !jar_arg.is_empty() {
+                command.arg(jar_arg);
+            }
         }
 
         command.stdout(Stdio::piped());
@@ -80,6 +86,7 @@ impl JavaJarRunner {
             Ok(process) => process,
             Err(e) => {
                 println!("Error starting Java process: {}", e);
+                let _ = core_tx.send(CoreEvent::ServerStopped { should_restart: false });
                 return;
             }
         };
@@ -141,17 +148,25 @@ impl JavaJarRunner {
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => { stop_requested = true; }
+                Err(RecvTimeoutError::Disconnected) => {
+                    stop_requested = true;
+                }
             }
 
             match child.try_wait() {
                 Ok(Some(status)) => {
                     println!("JAR finished with status: {}", status);
+                    let _ = core_tx.send(CoreEvent::ServerStopped {
+                        should_restart: self.auto_restart && !stop_requested,
+                    });
                     break;
                 }
                 Ok(None) => {}
                 Err(e) => {
                     println!("Error checking Java process: {}", e);
+                    let _ = core_tx.send(CoreEvent::ServerStopped {
+                        should_restart: self.auto_restart && !stop_requested,
+                    });
                     break;
                 }
             }
@@ -165,13 +180,21 @@ impl JavaJarRunner {
                     }
                 }
 
-                if let Ok(None) = child.try_wait() { let _ = child.kill(); }
+                if let Ok(None) = child.try_wait() {
+                    let _ = child.kill();
+                }
                 let _ = child.wait();
+
+                let _ = core_tx.send(CoreEvent::ServerStopped { should_restart: false });
                 break;
             }
         }
 
-        if let Some(handle) = stdout_handle { let _ = handle.join(); }
-        if let Some(handle) = stderr_handle { let _ = handle.join(); }
+        if let Some(handle) = stdout_handle {
+            let _ = handle.join();
+        }
+        if let Some(handle) = stderr_handle {
+            let _ = handle.join();
+        }
     }
 }

@@ -107,7 +107,6 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
 
         "stop" => {
             CoreApp::stop_server(ctx.server_runtime);
-            ctx.health_monitor.server_stopped();
             println!("[Core] Servidor detenido.");
         }
 

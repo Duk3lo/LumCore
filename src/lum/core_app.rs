@@ -31,6 +31,7 @@ pub enum CoreEvent {
     UserCommand(String),
     RestartRequested { changed_path: PathBuf },
     ServerStarted { pid: u32 },
+    ServerStopped { should_restart: bool },
     ServerLog(String),
 }
 
@@ -59,7 +60,9 @@ impl CoreApp {
             let stdin = io::stdin();
             for line in stdin.lock().lines() {
                 if let Ok(value) = line {
-                    if stdin_tx.send(CoreEvent::UserCommand(value)).is_err() { break; }
+                    if stdin_tx.send(CoreEvent::UserCommand(value)).is_err() {
+                        break;
+                    }
                 }
             }
         });
@@ -90,7 +93,9 @@ impl CoreApp {
                 match event {
                     CoreEvent::UserCommand(input) => {
                         let cmd = input.trim();
-                        if cmd.is_empty() { continue; }
+                        if cmd.is_empty() {
+                            continue;
+                        }
 
                         if cmd == "exit" || cmd == "stop" {
                             println!("[Core] Shutting down...");
@@ -122,7 +127,9 @@ impl CoreApp {
                         };
 
                         if commands::dispatch(cmd, &mut ctx) {
-                            if cmd.starts_with("core healing") { let _ = ctx.healing_cfg.save(); }
+                            if cmd.starts_with("core healing") {
+                                let _ = ctx.healing_cfg.save();
+                            }
                             continue;
                         }
 
@@ -134,15 +141,22 @@ impl CoreApp {
                     }
 
                     CoreEvent::RestartRequested { changed_path } => {
-                        if last_restart.elapsed() < Duration::from_millis(1200) { continue; }
+                        if last_restart.elapsed() < Duration::from_millis(1200) {
+                            continue;
+                        }
                         last_restart = Instant::now();
+
                         println!("[Watcher] Se detectó un cambio en: {:?}", changed_path);
                         let was_running = server_runtime.is_some();
-                        if was_running { Self::stop_server(&mut server_runtime); }
+                        if was_running {
+                            Self::stop_server(&mut server_runtime);
+                        }
 
                         if server_cfg.auto_restart || was_running {
                             if let Err(e) = Self::start_server(&server_cfg, &mut server_runtime, core_tx.clone()) {
                                 println!("[Core Error] {e}");
+                            } else {
+                                health_monitor.notify_server_started();
                             }
                         }
                     }
@@ -151,8 +165,33 @@ impl CoreApp {
                         health_monitor.set_server_pid(pid);
                     }
 
+                    CoreEvent::ServerStopped { should_restart } => {
+                        health_monitor.server_stopped();
+
+                        if let Some(runtime) = server_runtime.take() {
+                            let _ = runtime.handle.join();
+                        }
+
+                        println!("[Core] Servidor detenido.");
+
+                        if should_restart && server_cfg.auto_restart {
+                            println!("[Core] Auto-reinicio activado. Reiniciando...");
+                            if let Err(e) = Self::start_server(&server_cfg, &mut server_runtime, core_tx.clone()) {
+                                println!("[Core Error] {e}");
+                            } else {
+                                health_monitor.notify_server_started();
+                            }
+                        }
+                    }
+
                     CoreEvent::ServerLog(line) => {
-                        health_monitor.process_server_log(&line, &healing_cfg, &mut server_runtime, &server_cfg, core_tx.clone());
+                        health_monitor.process_server_log(
+                            &line,
+                            &healing_cfg,
+                            &mut server_runtime,
+                            &server_cfg,
+                            core_tx.clone(),
+                        );
                     }
                 }
             }
@@ -169,33 +208,59 @@ impl CoreApp {
         let path = Self::resolve_native_path(raw)?;
         let jar_path = if path.is_dir() {
             Self::detect_jar_in_dir(&path).ok_or_else(|| format!("No se encontró ningún .jar en {:?}", path))?
-        } else if path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("jar")).unwrap_or(false) {
+        } else if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("jar"))
+            .unwrap_or(false)
+        {
             path
         } else {
             return Err("La ruta debe ser una carpeta o un archivo .jar".to_string());
         };
 
         server_cfg.jar_path = jar_path.to_string_lossy().to_string();
-        server_cfg.save().map_err(|e| format!("No se pudo guardar config: {e}"))?;
+        server_cfg
+            .save()
+            .map_err(|e| format!("No se pudo guardar config: {e}"))?;
 
         Ok(format!("[Core] JAR detectado y guardado: {}", server_cfg.jar_path))
     }
 
     fn resolve_native_path(raw: &str) -> Result<PathBuf, String> {
         let raw = raw.trim();
-        if raw.is_empty() { return Err("Ruta vacía".to_string()); }
+        if raw.is_empty() {
+            return Err("Ruta vacía".to_string());
+        }
+
         let path = PathBuf::from(raw);
-        if path.is_absolute() { Ok(path) } 
-        else { std::env::current_dir().map_err(|e| format!("Error lectura cwd: {e}")).map(|cwd| cwd.join(path)) }
+        if path.is_absolute() {
+            Ok(path)
+        } else {
+            std::env::current_dir()
+                .map_err(|e| format!("Error lectura cwd: {e}"))
+                .map(|cwd| cwd.join(path))
+        }
     }
 
     fn detect_jar_in_dir(dir: &Path) -> Option<PathBuf> {
         let entries = fs::read_dir(dir).ok()?;
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("jar")).unwrap_or(false) { continue; }
+            if !path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("jar"))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
-            if name.contains(crate::lum::config::paths::MAIN_DIR) { continue; }
+            if name.contains(crate::lum::config::paths::MAIN_DIR) {
+                continue;
+            }
+
             return Some(path);
         }
         None
@@ -206,13 +271,19 @@ impl CoreApp {
         server_runtime: &mut Option<ServerRuntime>,
         core_tx: mpsc::Sender<CoreEvent>,
     ) -> Result<(), String> {
-        if server_runtime.is_some() { return Err("Ya está en ejecución".to_string()); }
+        if server_runtime.is_some() {
+            return Err("Ya está en ejecución".to_string());
+        }
+
         let runner = JavaJarRunner::from_config(server_cfg)?;
         let (tx, rx) = mpsc::channel::<RunnerCommand>();
 
-        let handle = thread::spawn(move || { runner.start_and_read(rx, core_tx); });
+        let handle = thread::spawn(move || {
+            runner.start_and_read(rx, core_tx);
+        });
+
         *server_runtime = Some(ServerRuntime { tx, handle });
-        
+
         Ok(())
     }
 
