@@ -10,9 +10,10 @@ use crate::lum::health::health_monitor::HealthMonitor;
 use crate::lum::java_jar_runner::{JavaJarRunner, RunnerCommand};
 use crate::lum::watchers::watcher_manager::WatcherManager;
 
+use rustyline::{error::ReadlineError, DefaultEditor};
+
 use std::{
     fs,
-    io::{self, BufRead},
     path::{Path, PathBuf},
     sync::mpsc,
     thread,
@@ -39,7 +40,8 @@ impl CoreApp {
     pub fn start() {
         println!("--- Starting CoreNexus (Rust Edition) ---");
 
-        let mut server_cfg = ServerConfig::load_or_create(ConfigLocation::Local).unwrap_or_default();
+        let mut server_cfg =
+            ServerConfig::load_or_create(ConfigLocation::Local).unwrap_or_default();
         let mut watchers_cfg = WatchersConfig::load_or_create().unwrap();
         let mut curseforge_cfg = CurseForgeConfig::load_or_create().unwrap();
         let mut github_cfg = GitHubConfig::load_or_create().unwrap();
@@ -57,13 +59,49 @@ impl CoreApp {
 
         let stdin_tx = core_tx.clone();
         thread::spawn(move || {
-            let stdin = io::stdin();
-            for line in stdin.lock().lines() {
-                if let Ok(value) = line {
-                    if stdin_tx.send(CoreEvent::UserCommand(value)).is_err() {
+            let mut rl = match DefaultEditor::new() {
+                Ok(editor) => editor,
+                Err(e) => {
+                    eprintln!("[Core] No se pudo iniciar la terminal interactiva: {e}");
+                    return;
+                }
+            };
+
+            let history_path = crate::lum::config::paths::base_config_dir()
+                .ok()
+                .map(|dir| dir.join(".core_history"));
+
+            if let Some(path) = &history_path {
+                let _ = rl.load_history(path);
+            }
+
+            loop {
+                match rl.readline("CoreNexus> ") {
+                    Ok(line) => {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+
+                        let _ = rl.add_history_entry(trimmed);
+                        if stdin_tx.send(CoreEvent::UserCommand(trimmed.to_string())).is_err() {
+                            break;
+                        }
+                    }
+                    Err(ReadlineError::Interrupted) => continue,
+                    Err(ReadlineError::Eof) => {
+                        let _ = stdin_tx.send(CoreEvent::UserCommand("quit".to_string()));
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!("[Core] Error de consola: {e}");
                         break;
                     }
                 }
+            }
+
+            if let Some(path) = &history_path {
+                let _ = rl.save_history(path);
             }
         });
 
@@ -71,8 +109,9 @@ impl CoreApp {
 
         let mut server_runtime: Option<ServerRuntime> = None;
         let mut last_restart = Instant::now() - Duration::from_secs(10);
+        let mut command_history: Vec<String> = Vec::new();
 
-        println!("[Core] Ready. Type commands (type 'exit' to quit).");
+        println!("[Core] Ready. Type commands (type 'help' to show the menu).");
         commands::print_help();
 
         loop {
@@ -85,7 +124,7 @@ impl CoreApp {
             health_monitor.tick(
                 &healing_cfg,
                 &mut server_runtime,
-                &server_cfg,
+                &mut server_cfg,
                 core_tx.clone(),
             );
 
@@ -97,8 +136,15 @@ impl CoreApp {
                             continue;
                         }
 
-                        if cmd == "exit" || cmd == "stop" {
-                            println!("[Core] Shutting down...");
+                        command_history.push(cmd.to_string());
+
+                        let normalized = cmd.to_lowercase();
+                        if normalized == "quit"
+                            || normalized == "shutdown"
+                            || normalized == "core quit"
+                            || normalized == "core shutdown"
+                        {
+                            println!("[Core] Cerrando el programa...");
                             let _ = curseforge_cfg.save();
                             let _ = github_cfg.save();
                             let _ = updates_cfg.save();
@@ -124,12 +170,12 @@ impl CoreApp {
                             watcher_manager: &mut watcher_manager,
                             server_runtime: &mut server_runtime,
                             event_tx: &core_tx,
+                            command_history: &command_history,
                         };
 
+                        ctx.reload_all();
+
                         if commands::dispatch(cmd, &mut ctx) {
-                            if cmd.starts_with("core healing") {
-                                let _ = ctx.healing_cfg.save();
-                            }
                             continue;
                         }
 
@@ -153,7 +199,11 @@ impl CoreApp {
                         }
 
                         if server_cfg.auto_restart || was_running {
-                            if let Err(e) = Self::start_server(&server_cfg, &mut server_runtime, core_tx.clone()) {
+                            if let Err(e) = Self::start_server(
+                                &mut server_cfg,
+                                &mut server_runtime,
+                                core_tx.clone(),
+                            ) {
                                 println!("[Core Error] {e}");
                             } else {
                                 health_monitor.notify_server_started();
@@ -176,7 +226,11 @@ impl CoreApp {
 
                         if should_restart && server_cfg.auto_restart {
                             println!("[Core] Auto-reinicio activado. Reiniciando...");
-                            if let Err(e) = Self::start_server(&server_cfg, &mut server_runtime, core_tx.clone()) {
+                            if let Err(e) = Self::start_server(
+                                &mut server_cfg,
+                                &mut server_runtime,
+                                core_tx.clone(),
+                            ) {
                                 println!("[Core Error] {e}");
                             } else {
                                 health_monitor.notify_server_started();
@@ -189,7 +243,7 @@ impl CoreApp {
                             &line,
                             &healing_cfg,
                             &mut server_runtime,
-                            &server_cfg,
+                            &mut server_cfg,
                             core_tx.clone(),
                         );
                     }
@@ -204,10 +258,14 @@ impl CoreApp {
         rest.split_whitespace().map(|s| s.to_string()).collect()
     }
 
-    pub(crate) fn set_server_path(server_cfg: &mut ServerConfig, raw: &str) -> Result<String, String> {
+    pub(crate) fn set_server_path(
+        server_cfg: &mut ServerConfig,
+        raw: &str,
+    ) -> Result<String, String> {
         let path = Self::resolve_native_path(raw)?;
         let jar_path = if path.is_dir() {
-            Self::detect_jar_in_dir(&path).ok_or_else(|| format!("No se encontró ningún .jar en {:?}", path))?
+            Self::detect_jar_in_dir(&path)
+                .ok_or_else(|| format!("No se encontró ningún .jar en {:?}", path))?
         } else if path
             .extension()
             .and_then(|e| e.to_str())
@@ -224,7 +282,10 @@ impl CoreApp {
             .save()
             .map_err(|e| format!("No se pudo guardar config: {e}"))?;
 
-        Ok(format!("[Core] JAR detectado y guardado: {}", server_cfg.jar_path))
+        Ok(format!(
+            "[Core] JAR detectado y guardado: {}",
+            server_cfg.jar_path
+        ))
     }
 
     fn resolve_native_path(raw: &str) -> Result<PathBuf, String> {
@@ -256,7 +317,11 @@ impl CoreApp {
                 continue;
             }
 
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_lowercase();
             if name.contains(crate::lum::config::paths::MAIN_DIR) {
                 continue;
             }
@@ -267,13 +332,15 @@ impl CoreApp {
     }
 
     pub(crate) fn start_server(
-        server_cfg: &ServerConfig,
+        server_cfg: &mut ServerConfig,
         server_runtime: &mut Option<ServerRuntime>,
         core_tx: mpsc::Sender<CoreEvent>,
     ) -> Result<(), String> {
         if server_runtime.is_some() {
             return Err("Ya está en ejecución".to_string());
         }
+
+        server_cfg.reload()?;
 
         let runner = JavaJarRunner::from_config(server_cfg)?;
         let (tx, rx) = mpsc::channel::<RunnerCommand>();

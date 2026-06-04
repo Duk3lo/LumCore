@@ -1,10 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    path::PathBuf,
-};
+use std::{fs, path::PathBuf};
 
-use super::paths::{base_config_dir, SERVER_CONFIG_FILE};
+use super::paths::{SERVER_CONFIG_FILE, base_config_dir};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ConfigLocation {
@@ -50,8 +47,7 @@ impl ServerConfig {
                 .map_err(|e| format!("Could not read config: {e}"))?;
 
             let mut config: ServerConfig =
-                serde_json::from_str(&content)
-                    .map_err(|e| format!("Invalid JSON: {e}"))?;
+                serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {e}"))?;
 
             config.config_dir = config_dir;
             config.config_file_path = config_file_path;
@@ -65,6 +61,24 @@ impl ServerConfig {
             config.save()?;
             Ok(config)
         }
+    }
+
+    pub fn reload(&mut self) -> Result<(), String> {
+        if self.config_file_path.as_os_str().is_empty() {
+            return Err("config_file_path está vacío".to_string());
+        }
+
+        let content = fs::read_to_string(&self.config_file_path)
+            .map_err(|e| format!("Could not read config: {e}"))?;
+
+        let mut fresh: ServerConfig =
+            serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {e}"))?;
+
+        fresh.config_dir = self.config_dir.clone();
+        fresh.config_file_path = self.config_file_path.clone();
+
+        *self = fresh;
+        Ok(())
     }
 
     pub fn save(&self) -> Result<(), String> {

@@ -7,12 +7,10 @@ use super::paths::{base_config_dir, HEALING_CONFIG_FILE};
 pub struct HealingConfig {
     pub enable: bool,
 
-    // Tiempos dinámicos: D (Días), H (Horas), M (Minutos), S (Segundos)
     pub initial_delay: String,
     pub check_interval: String,
     pub scheduled_restart: String,
 
-    // Configuración de TPS
     pub min_tps_threshold: f64,
     pub max_strikes: u32,
 
@@ -57,6 +55,22 @@ impl HealingConfig {
             config.save()?;
             Ok(config)
         }
+    }
+
+    pub fn reload(&mut self) -> Result<(), String> {
+        if self.config_file_path.as_os_str().is_empty() {
+            return Err("config_file_path está vacío".to_string());
+        }
+
+        let content = fs::read_to_string(&self.config_file_path)
+            .map_err(|e| format!("Could not read config: {e}"))?;
+
+        let mut fresh: HealingConfig =
+            serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {e}"))?;
+
+        fresh.config_file_path = self.config_file_path.clone();
+        *self = fresh;
+        Ok(())
     }
 
     pub fn save(&self) -> Result<(), String> {

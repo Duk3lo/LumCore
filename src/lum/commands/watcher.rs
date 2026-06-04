@@ -14,6 +14,8 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
     let sub = parts.next().unwrap_or("help").to_lowercase();
     let args = parts.collect::<Vec<_>>().join(" ");
 
+    let _ = ctx.watchers_cfg.reload();
+
     let workspace = match workspace_dir() {
         Ok(p) => p,
         Err(e) => {
@@ -35,7 +37,10 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
                     "{} | enabled={} | dest={}",
                     name,
                     w.enabled,
-                    w.destination_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "none".to_string())
+                    w.destination_path
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "none".to_string())
                 );
             }
         }
@@ -64,7 +69,7 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
             };
 
             let final_dest_raw = if dest_raw.is_empty() { crate::lum::config::paths::SYNC_MODS_DIR } else { dest_raw };
-            
+
             let destination = match resolve(&workspace, final_dest_raw) {
                 Some(p) => p,
                 None => { println!("[Watcher Error] destination inválido"); return true; }
@@ -98,7 +103,7 @@ pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
                 w.enabled = true;
                 let cfg_clone = w.clone();
                 let _ = ctx.watchers_cfg.save();
-                
+
                 ctx.watcher_manager.stop_named(name);
                 let _ = ctx.watcher_manager.start_named(name.to_string(), cfg_clone, ctx.event_tx.clone());
                 println!("[Watcher] habilitado: {}", name);

@@ -48,6 +48,22 @@ impl GitHubConfig {
         }
     }
 
+    pub fn reload(&mut self) -> Result<(), String> {
+        if self.config_file_path.as_os_str().is_empty() {
+            return Err("config_file_path está vacío".to_string());
+        }
+
+        let content = fs::read_to_string(&self.config_file_path)
+            .map_err(|e| format!("Could not read config: {e}"))?;
+
+        let mut fresh: GitHubConfig =
+            serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {e}"))?;
+
+        fresh.config_file_path = self.config_file_path.clone();
+        *self = fresh;
+        Ok(())
+    }
+
     pub fn save(&self) -> Result<(), String> {
         if let Some(parent) = self.config_file_path.parent() {
             fs::create_dir_all(parent)

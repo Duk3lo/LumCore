@@ -1,6 +1,6 @@
 use crate::lum::config::curseforge_config::CurseForgeResource;
 use crate::lum::config::paths;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Local;
 use md5::{Digest as Md5Digest, Md5};
 use reqwest::blocking::Client;
@@ -72,7 +72,8 @@ impl CurseForgeClient {
     }
 
     pub fn get_file_info(&self, project_id: u32, file_id: u32) -> Result<CfFile> {
-        let res: CfResponse<CfFile> = self.get(&format!("mods/{}/files/{}", project_id, file_id))?;
+        let res: CfResponse<CfFile> =
+            self.get(&format!("mods/{}/files/{}", project_id, file_id))?;
         Ok(res.data)
     }
 
@@ -109,16 +110,22 @@ impl CurseForgeClient {
             }
         }
 
-        let download_url = file_info
-            .download_url
-            .ok_or_else(|| anyhow!("Distribución deshabilitada por el autor para {}", file_info.file_name))?;
+        let download_url = file_info.download_url.ok_or_else(|| {
+            anyhow!(
+                "Distribución deshabilitada por el autor para {}",
+                file_info.file_name
+            )
+        })?;
 
-        println!("[CurseForge] Descargando actualización: {}...", file_info.file_name);
+        println!(
+            "[CurseForge] Descargando actualización: {}...",
+            file_info.file_name
+        );
 
         let cf_dir = workspace.join("curseforge");
         let downloads_dir = cf_dir.join("downloads");
         fs::create_dir_all(&downloads_dir)?;
-        
+
         let temp_file_path = downloads_dir.join(&file_info.file_name);
 
         let mut response = self.client.get(&download_url).send()?.error_for_status()?;
@@ -155,14 +162,21 @@ impl CurseForgeClient {
         resource.local_file_id = file_info.id;
         resource.local_file_name = Some(file_info.file_name.clone());
 
-        println!("[CurseForge] ✅ '{}' actualizado y movido a syncmods.", mod_key);
+        println!(
+            "[CurseForge] ✅ '{}' actualizado y movido a syncmods.",
+            mod_key
+        );
         Ok(true)
     }
 
-    pub fn restore_latest_backup(&self, resource: &mut CurseForgeResource, mod_key: &str) -> Result<()> {
+    pub fn restore_latest_backup(
+        &self,
+        resource: &mut CurseForgeResource,
+        mod_key: &str,
+    ) -> Result<()> {
         let workspace = paths::workspace_dir().map_err(|e| anyhow!(e))?;
         let backup_dir = workspace.join("curseforge").join("backups").join(mod_key);
-        
+
         if !backup_dir.exists() {
             return Err(anyhow!("No hay carpeta de backups para '{}'", mod_key));
         }
@@ -183,7 +197,11 @@ impl CurseForgeClient {
         }
 
         if let Some(backup_path) = latest_file {
-            let file_name = backup_path.file_name().unwrap().to_string_lossy().to_string();
+            let file_name = backup_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
             let original_name = if let Some(idx) = file_name.find(".backup_") {
                 &file_name[..idx]
             } else {
@@ -200,34 +218,51 @@ impl CurseForgeClient {
 
             fs::copy(&backup_path, dest_dir.join(original_name))?;
             resource.local_file_name = Some(original_name.to_string());
-            resource.local_file_id = 0; 
+            resource.local_file_id = 0;
 
-            println!("[CurseForge] ✅ Mod restaurado exitosamente desde backup: {}", original_name);
+            println!(
+                "[CurseForge] ✅ Mod restaurado exitosamente desde backup: {}",
+                original_name
+            );
             Ok(())
         } else {
-            Err(anyhow!("La carpeta de backups para '{}' está vacía.", mod_key))
+            Err(anyhow!(
+                "La carpeta de backups para '{}' está vacía.",
+                mod_key
+            ))
         }
     }
 
     fn verify_hash(&self, file_path: &Path, hashes: &[CfHash]) -> Result<()> {
         let mut file = File::open(file_path)?;
         let mut buffer = Vec::new();
+
         file.read_to_end(&mut buffer)?;
 
         for hash in hashes {
             match hash.algo {
                 1 => {
-                    let digest = format!("{:x}", Sha1::digest(&buffer));
-                    if digest == hash.value { return Ok(()); }
+                    let digest = hex::encode(Sha1::digest(&buffer));
+
+                    if digest.eq_ignore_ascii_case(&hash.value) {
+                        return Ok(());
+                    }
                 }
+
                 2 => {
-                    let digest = format!("{:x}", Md5::digest(&buffer));
-                    if digest == hash.value { return Ok(()); }
+                    let digest = hex::encode(Md5::digest(&buffer));
+
+                    if digest.eq_ignore_ascii_case(&hash.value) {
+                        return Ok(());
+                    }
                 }
-                _ => continue,
+
+                _ => {}
             }
         }
 
-        Err(anyhow!("Verificación de Hash fallida. El archivo descargado está corrupto."))
+        Err(anyhow!(
+            "Verificación de Hash fallida. El archivo descargado está corrupto."
+        ))
     }
 }

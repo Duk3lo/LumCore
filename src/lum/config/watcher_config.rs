@@ -89,6 +89,24 @@ impl WatchersConfig {
             Ok(cfg)
         }
     }
+
+    pub fn reload(&mut self) -> Result<(), String> {
+        if self.config_file_path.as_os_str().is_empty() {
+            return Err("config_file_path está vacío".to_string());
+        }
+
+        let content = fs::read_to_string(&self.config_file_path)
+            .map_err(|e| format!("No pude leer watchers.json: {e}"))?;
+
+        let mut fresh: WatchersConfig =
+            serde_json::from_str(&content).map_err(|e| format!("JSON inválido en watchers.json: {e}"))?;
+
+        fresh.config_dir = self.config_dir.clone();
+        fresh.config_file_path = self.config_file_path.clone();
+        *self = fresh;
+        Ok(())
+    }
+
     pub fn update_default_destination(&mut self, jar_path: &str) -> Result<(), String> {
         if jar_path.is_empty() {
             return Ok(());

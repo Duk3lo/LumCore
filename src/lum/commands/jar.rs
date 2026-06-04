@@ -15,6 +15,7 @@ fn refresh_default_watcher(ctx: &mut CoreContext) {
 }
 
 pub fn handle(input: &str, ctx: &mut CoreContext) -> bool {
+    let _ = ctx.server_cfg.reload();
     let mut parts = input.split_whitespace();
 
     if parts.next() != Some(PREFIX) { return false; }
